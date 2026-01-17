@@ -177,7 +177,9 @@ async function processEvent(pageId, pageConfig, psid, messageId, message, source
         }
     };
 
+    console.log(`[Server] Appending data to Google Sheets (Page: ${pageConfig.name})...`);
     await appendToSheet(sheetContext, dataToSave);
+    console.log(`[Server] ✅ Data appended to Google Sheets.`);
 
     // 5. Gửi lên API N8N
     const n8nData = {
@@ -192,7 +194,9 @@ async function processEvent(pageId, pageConfig, psid, messageId, message, source
         extracted_phone_number: phoneNumber
     };
 
+    console.log(`[Server] Sending data to N8N (Source: ${source})...`);
     await sendToN8N(n8nData);
+    console.log(`[Server] ✅ Data sent to N8N.`);
 
     // 6. Trả lời hội thoại về Inbox chính (Để tin nhắn nhảy ra khỏi mục "Xong")
     await passThreadControl(pageConfig, psid);

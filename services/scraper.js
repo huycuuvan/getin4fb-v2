@@ -41,7 +41,15 @@ async function scrapeProfileLink(psid, senderName, pageId) {
         }
 
         const businessInboxUrl = `https://business.facebook.com/latest/inbox/all?asset_id=${pageId}`;
-        await page.goto(businessInboxUrl, { waitUntil: 'networkidle2', timeout: 30000 });
+        await page.goto(businessInboxUrl, { waitUntil: 'networkidle2', timeout: 60000 });
+
+        // Kiểm tra xem có bị đá ra trang login không
+        const currentUrl = page.url();
+        if (currentUrl.includes('facebook.com/login') || currentUrl.includes('business.facebook.com/login')) {
+            console.error('[Scraper] ❌ Cookies expired or invalid. Redirected to login page.');
+            return null;
+        }
+
         await new Promise(resolve => setTimeout(resolve, 5000));
 
         // Step 2: Click conversation mới nhất
@@ -149,7 +157,7 @@ async function scrapeProfileLink(psid, senderName, pageId) {
                 }
             });
 
-            if (profileLink) await new Promise(resolve => setTimeout(resolve, 800));
+            if (info && info.profileLink) await new Promise(resolve => setTimeout(resolve, 800));
 
             // Chỉ click trong menu nếu chưa tìm thấy ở ngoài
             await page.evaluate(() => {
