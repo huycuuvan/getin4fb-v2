@@ -70,7 +70,7 @@ app.post('/webhook', async (req, res) => {
                         const messageText = webhook_event.message.text || '[Attachment/Non-text]';
                         const mode = entry.standby ? 'Standby' : 'Inbox';
                         console.log(`[${mode}][${pageConfig.name || pageId}] Received from ${psid}: ${messageText}`);
-                        processEvent(pageId, pageConfig, psid, messageId, messageText, 'Inbox').catch(err => {
+                        processEvent(pageId, pageConfig, psid, messageId, messageText, mode).catch(err => {
                             console.error(`[Error] Message processing failed:`, err.message);
                         });
                     }
@@ -199,8 +199,11 @@ async function processEvent(pageId, pageConfig, psid, messageId, message, source
     await sendToN8N(n8nData);
     console.log(`[Server] ✅ Data sent to N8N.`);
 
-    // 6. Trả lời hội thoại về Inbox chính (Để tin nhắn nhảy ra khỏi mục "Xong")
-    await passThreadControl(pageConfig, psid);
+    // 6. Trả lời hội thoại về Inbox chính (Chỉ làm nếu App là Primary - 'Inbox')
+    if (source === 'Inbox') {
+        console.log(`[Server] Passing thread control back to Inbox...`);
+        await passThreadControl(pageConfig, psid);
+    }
 }
 
 // Health check endpoint

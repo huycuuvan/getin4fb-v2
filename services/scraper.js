@@ -138,33 +138,45 @@ async function scrapeProfileLink(psid, senderName, pageId) {
                 const allButtons = Array.from(document.querySelectorAll('div[role="button"], span, div'));
                 let foundUnread = false;
 
-                // Tìm và click nút "Đánh dấu là chưa đọc"
+                // Tìm và click các nút lôi tin nhắn ra Inbox
+                const unreadTerms = [
+                    'đánh dấu là chưa đọc', 'mark as unread',
+                    'đưa vào hộp thư đến', 'move to inbox',
+                    'đánh dấu là chưa xong', 'mark as not done'
+                ];
+
                 for (const btn of allButtons) {
                     const txt = btn.textContent.trim().toLowerCase();
-                    if (txt === 'đánh dấu là chưa đọc' || txt === 'mark as unread') {
+                    if (unreadTerms.includes(txt)) {
                         btn.click();
                         foundUnread = true;
+                        console.log('Clicked:', txt);
                         break;
                     }
                 }
 
                 // 2. Nếu không thấy nút ngoài, mở menu "Ba chấm"
                 if (!foundUnread) {
-                    const more = document.querySelector('div[aria-label="Xem thêm" i], div[aria-label="More" i]');
+                    const more = document.querySelector('div[aria-label="Xem thêm" i], div[aria-label="More" i], div[aria-label*="Menu"]');
                     if (more) {
                         more.click();
                     }
                 }
             });
 
-            if (info && info.profileLink) await new Promise(resolve => setTimeout(resolve, 800));
+            if (info && info.profileLink) await new Promise(resolve => setTimeout(resolve, 1000));
 
             // Chỉ click trong menu nếu chưa tìm thấy ở ngoài
             await page.evaluate(() => {
+                const unreadTerms = [
+                    'đánh dấu là chưa đọc', 'mark as unread',
+                    'đưa vào hộp thư đến', 'move to inbox',
+                    'đánh dấu là chưa xong', 'mark as not done'
+                ];
                 const menuItems = Array.from(document.querySelectorAll('div[role="menuitem"], span, div'));
                 for (const item of menuItems) {
                     const t = item.textContent.toLowerCase();
-                    if (t === 'đánh dấu là chưa đọc' || t === 'mark as unread') {
+                    if (unreadTerms.includes(t)) {
                         item.click();
                         break;
                     }
