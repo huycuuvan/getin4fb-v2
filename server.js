@@ -60,19 +60,20 @@ app.post('/webhook', async (req, res) => {
                 continue;
             }
 
-            // 1. Xử lý TIN NHẮN (Messaging)
-            if (entry.messaging) {
-                const webhook_event = entry.messaging[0];
-                if (webhook_event.message && !webhook_event.message.is_echo) {
-                    const psid = webhook_event.sender.id;
-                    const messageId = webhook_event.message.mid;
-                    const messageText = webhook_event.message.text || '[Attachment/Non-text]';
-                    console.log(`[Message][${pageConfig.name || pageId}] Received from ${psid}: ${messageText}`);
-                    processEvent(pageId, pageConfig, psid, messageId, messageText, 'Inbox').catch(err => {
-                        console.error(`[Error] Message processing failed:`, err.message);
-                    });
-                } else {
-                    console.log(`[Webhook][${pageConfig.name || pageId}] Ignored non-message event.`);
+            // 1. Xử lý TIN NHẮN (Messaging hoặc Standby - nghe lén)
+            const messaging_events = entry.messaging || entry.standby;
+            if (messaging_events) {
+                for (const webhook_event of messaging_events) {
+                    if (webhook_event.message && !webhook_event.message.is_echo) {
+                        const psid = webhook_event.sender.id;
+                        const messageId = webhook_event.message.mid;
+                        const messageText = webhook_event.message.text || '[Attachment/Non-text]';
+                        const mode = entry.standby ? 'Standby' : 'Inbox';
+                        console.log(`[${mode}][${pageConfig.name || pageId}] Received from ${psid}: ${messageText}`);
+                        processEvent(pageId, pageConfig, psid, messageId, messageText, 'Inbox').catch(err => {
+                            console.error(`[Error] Message processing failed:`, err.message);
+                        });
+                    }
                 }
             }
 
