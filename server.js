@@ -48,9 +48,8 @@ app.get('/webhook', (req, res) => {
 // Webhook Event Handling (POST)
 app.post('/webhook', async (req, res) => {
     const body = req.body;
-    console.log('[Webhook] Received Payload:', JSON.stringify(body, null, 2));
-
     if (body.object === 'page') {
+        console.log(`[Webhook] Received update for ${body.entry.length} entries.`);
         for (const entry of body.entry) {
             const pageId = entry.id;
             const pageConfig = config.pages[pageId];
@@ -64,15 +63,21 @@ app.post('/webhook', async (req, res) => {
             const messaging_events = entry.messaging || entry.standby;
             if (messaging_events) {
                 for (const webhook_event of messaging_events) {
-                    if (webhook_event.message && !webhook_event.message.is_echo) {
+                    if (webhook_event.message) {
                         const psid = webhook_event.sender.id;
-                        const messageId = webhook_event.message.mid;
                         const messageText = webhook_event.message.text || '[Attachment/Non-text]';
+                        const isEcho = webhook_event.message.is_echo;
                         const mode = entry.standby ? 'Standby' : 'Inbox';
-                        console.log(`[${mode}][${pageConfig.name || pageId}] Received from ${psid}: ${messageText}`);
-                        processEvent(pageId, pageConfig, psid, messageId, messageText, mode).catch(err => {
-                            console.error(`[Error] Message processing failed:`, err.message);
-                        });
+
+                        // In ra toàn bộ để anh dễ theo dõi
+                        console.log(`[Webhook][${mode}] Event: ${isEcho ? 'Echo' : 'Message'}, From: ${psid}, Text: ${messageText}`);
+
+                        if (!isEcho) {
+                            const messageId = webhook_event.message.mid;
+                            processEvent(pageId, pageConfig, psid, messageId, messageText, mode).catch(err => {
+                                console.error(`[Error] Message processing failed:`, err.message);
+                            });
+                        }
                     }
                 }
             }

@@ -6,16 +6,10 @@ const COOKIES_PATH = path.resolve(__dirname, '../cookies.json');
 
 /**
  * Lấy Profile Link và Tên thật từ Business Suite
- * @param {string} psid - Page-Scoped ID
- * @param {string} senderName - Tên người gửi (từ API)
- * @param {string} pageId - ID của Page
- * @returns {Promise<Object|null>} - { profileLink, customerName } hoặc null
  */
 async function scrapeProfileLink(psid, senderName, pageId) {
     let browser = null;
     try {
-        console.log(`[Scraper] Starting browser for: ${senderName} (Page: ${pageId})`);
-
         browser = await puppeteer.launch({
             headless: true,
             args: ['--no-sandbox', '--disable-setuid-sandbox']
@@ -23,14 +17,6 @@ async function scrapeProfileLink(psid, senderName, pageId) {
 
         const page = await browser.newPage();
         await page.setViewport({ width: 1920, height: 1080 });
-
-        // Hạn chế log rác từ browser
-        page.on('console', msg => {
-            const text = msg.text();
-            if (text.includes('Found name') || text.includes('Found profile')) {
-                console.log('[Browser]', text);
-            }
-        });
 
         if (fs.existsSync(COOKIES_PATH)) {
             const cookies = JSON.parse(fs.readFileSync(COOKIES_PATH, 'utf8'));
@@ -43,174 +29,153 @@ async function scrapeProfileLink(psid, senderName, pageId) {
         const businessInboxUrl = `https://business.facebook.com/latest/inbox/all?asset_id=${pageId}&selected_item_id=${psid}`;
         await page.goto(businessInboxUrl, { waitUntil: 'networkidle2', timeout: 60000 });
 
-        // Kiểm tra xem có bị đá ra trang login không
         const currentUrl = page.url();
-        if (currentUrl.includes('facebook.com/login') || currentUrl.includes('business.facebook.com/login')) {
-            console.error('[Scraper] ❌ Cookies expired or invalid. Redirected to login page.');
+        if (currentUrl.includes('facebook.com/login')) {
+            console.error('[Scraper] ❌ Cookies expired.');
             return null;
         }
 
         await new Promise(resolve => setTimeout(resolve, 5000));
 
-        // Step 2: Click conversation mới nhất
-        const conversationClicked = await page.evaluate(() => {
-            const selectors = ['[role="row"]', '[data-testid*="conversation"]', 'div[role="button"][tabindex="0"]'];
-            for (const selector of selectors) {
-                const conversations = document.querySelectorAll(selector);
-                if (conversations.length > 0) {
-                    conversations[0].click();
-                    return true;
+        // Step 2: Chọn cuộc hội thoại (CHỈ bấm vào Tên hoặc Avatar, né tuyệt đối nút Xong)
+        await page.evaluate(() => {
+            const danger = ['xong', 'done', 'tích', 'complete', 'hoàn thành', 'archive'];
+            const rows = Array.from(document.querySelectorAll('[role="row"], [data-testid*="conversation"]'));
+
+            for (const row of rows) {
+                const subElements = Array.from(row.querySelectorAll('span, div, img'));
+                const targetToClick = subElements.find(el => {
+                    const label = (el.getAttribute('aria-label') || '').toLowerCase();
+                    const title = (el.getAttribute('title') || el.title || '').toLowerCase();
+                    const txt = el.textContent.toLowerCase();
+                    const ctx = (label + ' ' + title + ' ' + txt).trim();
+
+                    if (danger.some(d => ctx.includes(d)) && !ctx.includes('chưa')) return false;
+
+                    const style = window.getComputedStyle(el);
+                    const isName = el.textContent.length > 2 && (style.fontWeight === 'bold' || style.fontWeight === '700' || el.className.includes('x1vvvo52'));
+                    const isAvatar = el.tagName === 'IMG' || (el.className && el.className.includes('avatar'));
+                    return isName || isAvatar;
+                });
+
+                if (targetToClick) {
+                    targetToClick.click();
+                    return;
                 }
             }
-            return false;
         });
 
-        if (!conversationClicked) return null;
         await new Promise(resolve => setTimeout(resolve, 3000));
 
-        // Step 3: Click sender name để mở panel thông tin
-        await page.evaluate((targetName) => {
-            const allElements = Array.from(document.querySelectorAll('span, div, a, h1, h2, h3'));
-            for (const el of allElements) {
-                const val = el.textContent.trim();
-                // Click vào tên khách hàng hoặc "Người dùng Messenger"
-                if ((val === targetName || val === 'Người dùng Messenger' || val.includes(targetName)) && el.offsetParent !== null) {
-                    el.click();
-                    break;
-                }
-            }
+        // Step 3: Mở Panel thông tin
+        await page.evaluate((name) => {
+            const els = Array.from(document.querySelectorAll('span, div, a'));
+            const target = els.find(el => el.textContent.trim() === name || el.textContent.trim() === 'Người dùng Messenger');
+            if (target) target.click();
         }, senderName);
 
         await new Promise(resolve => setTimeout(resolve, 4000));
 
-        // Step 4: Extract Info (Name & Link)
+        // Step 4: Lấy Link & Tên (Lọc kỹ để né link Help/System)
         const info = await page.evaluate(async () => {
-            const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-            let lastChance = null;
             let extractedName = null;
+            const nameEl = document.querySelector('div[role="heading"][aria-level="3"], div[role="main"] h2');
+            if (nameEl) extractedName = nameEl.textContent.trim();
 
-            for (let i = 0; i < 10; i++) {
-                if (!extractedName) {
-                    // Ưu tiên bộ chọn aria-level="3" của bạn
-                    const nameSelectors = [
-                        'div[role="heading"][aria-level="3"]',
-                        'div[role="main"] h2',
-                        'div[depth="0"] div[dir="auto"] span'
-                    ];
-                    for (const sel of nameSelectors) {
-                        const el = document.querySelector(sel);
-                        if (el && el.textContent.trim().length > 2) {
-                            const val = el.textContent.trim();
-                            if (!['Hộp thư', 'Facebook', 'Xong', 'Messenger'].includes(val)) {
-                                extractedName = val;
-                                break;
-                            }
-                        }
-                    }
+            const links = Array.from(document.querySelectorAll('a'));
+
+            // Blacklist các link hệ thống của Facebook
+            const systemPaths = ['/help/', '/policies/', '/legal/', '/about/', '/settings/', '/notifications/', '/messages/', '/ads/', '/business/'];
+
+            let bestLink = null;
+
+            for (const link of links) {
+                const href = link.href || '';
+                const text = link.textContent.toLowerCase();
+
+                // ƯU TIÊN 1: Nút "Xem trang cá nhân" chính thống
+                if (text.includes('xem trang cá nhân') || text.includes('view profile')) {
+                    return { profileLink: href, customerName: extractedName };
                 }
 
-                const links = Array.from(document.querySelectorAll('a'));
-                for (const link of links) {
-                    const text = link.textContent.trim().toLowerCase();
-                    const href = link.href || '';
-                    if (text.includes('xem trang cá nhân') || text.includes('view profile')) {
-                        return { profileLink: href, customerName: extractedName };
+                if (href.includes('facebook.com/') && !href.includes('/latest/')) {
+                    // Kiểm tra xem có nằm trong Blacklist không
+                    const isSystem = systemPaths.some(p => href.includes(p));
+                    if (isSystem) continue;
+
+                    // Nếu là profile.php?id= thì lấy luôn (Ưu tiên 2)
+                    if (href.includes('profile.php?id=')) {
+                        bestLink = href;
+                        continue;
                     }
-                    if (href.includes('facebook.com/') && !href.includes('/latest/') && !href.includes('/business/')) {
-                        if (href.includes('profile.php?id=') || (!href.includes('?') && href.split('/').pop().length > 5)) {
-                            if (!['pages', 'groups', 'home'].some(k => href.includes('/' + k))) {
-                                lastChance = href;
-                            }
-                        }
+
+                    // Ưu tiên 3: Link username (thường ngắn và không có nhiều dấu /)
+                    const pathParts = new URL(href).pathname.split('/').filter(p => p);
+                    if (pathParts.length === 1 && pathParts[0].length > 4) {
+                        bestLink = href;
                     }
                 }
-                if (lastChance && i > 5) return { profileLink: lastChance, customerName: extractedName };
-                await sleep(500);
             }
-            return { profileLink: null, customerName: extractedName };
+            return { profileLink: bestLink, customerName: extractedName };
         });
 
-        // Step 5: Đánh dấu là chưa đọc (Fix lỗi nhảy vào mục Xong)
-        console.log('[Scraper] Step 5: Marking as unread (Prevention mode)...');
+        // Step 5 & 6: Lôi khách ra Inbox (NỀN TẢNG QUAN TRỌNG)
         try {
-            await page.evaluate(() => {
-                // 1. Thử tìm nút trực tiếp có chữ "chưa đọc"
-                const allButtons = Array.from(document.querySelectorAll('div[role="button"], span, div'));
-                let foundUnread = false;
+            const actionResult = await page.evaluate(() => {
+                const inboxTerms = ['thư mục chính', 'move to main', 'hộp thư đến', 'move to inbox', 'bỏ lưu trữ', 'unarchive'];
+                const unreadTerms = ['chưa đọc', 'unread', 'chưa xong'];
+                const danger = ['xong', 'done', 'tích', 'complete', 'archive'];
 
-                // Tìm và click các nút lôi tin nhắn ra Inbox
-                // TỪ KHÓA AN TOÀN (Safe Keywords) - Chỉ bấm vào những nút này
-                const safeTerms = [
-                    'đánh dấu là chưa đọc', 'mark as unread',
-                    'đưa vào hộp thư đến', 'move to inbox'
-                ];
-
-                // TỪ KHÓA NGUY HIỂM (Danger Keywords) - Tuyệt đối tránh
-                // Nút tích V (Done) thường có nhãn: "Xong", "Done", "Move to Done", "Hoàn thành"
-                const dangerTerms = ['xong', 'done', 'check', 'tích', 'complete', 'hoàn thành'];
-
-                for (const btn of allButtons) {
-                    const txt = (btn.textContent || '').trim().toLowerCase();
-                    const label = (btn.getAttribute('aria-label') || '').toLowerCase();
-                    const fullText = txt + ' ' + label;
-
-                    // 1. Phải chứa từ khóa AN TOÀN
-                    const isSafe = safeTerms.some(term => fullText.includes(term));
-
-                    // 2. Tuyệt đối KHÔNG ĐƯỢC chứa từ khóa nguy hiểm đứng một mình 
-                    // (Ví dụ: "Đánh dấu là Xong" -> NGUY HIỂM. "Chưa Xong" -> OK nhưng tốt nhất né luôn từ Xong cho lành)
-                    const isDangerous = dangerTerms.some(d => fullText === d || label === d || txt === d);
-
-                    // Đặc biệt né nút có icon Tick/Check nếu không chắc chắn
-                    const hasCheckIcon = btn.querySelector('i[class*="check"], svg[class*="check"]');
-
-                    if (isSafe && !isDangerous && !hasCheckIcon) {
-                        btn.click();
-                        foundUnread = true;
-                        console.log('[Scraper] ✅ Clicked SAFE button:', txt || label);
-                        break;
+                const findAndClick = (terms) => {
+                    const all = Array.from(document.querySelectorAll('div[role="button"], span, div'));
+                    for (const el of all) {
+                        if (el.children.length > 3 || el.textContent.length > 30) continue;
+                        const label = (el.getAttribute('aria-label') || '').toLowerCase();
+                        const title = (el.getAttribute('title') || el.title || '').toLowerCase();
+                        const txt = el.textContent.toLowerCase();
+                        const ctx = (label + ' ' + title + ' ' + txt).trim();
+                        if (terms.some(t => ctx.includes(t)) && !danger.some(d => ctx.includes(d) && !ctx.includes('chưa'))) {
+                            el.click();
+                            return ctx;
+                        }
                     }
-                }
+                    return null;
+                };
 
-                // 2. Nếu không thấy nút tính năng, mở menu "Ba chấm" (...)
-                if (!foundUnread) {
-                    // Tìm nút More/Ba chấm/Menu - Tránh nhầm với nút khác
-                    const more = document.querySelector('div[aria-label="Xem thêm" i], div[aria-label="More" i], div[aria-label="Hành động khác" i]');
-                    if (more) {
-                        more.click();
-                    }
-                }
+                let doneAction = findAndClick(inboxTerms);
+                if (doneAction) return { type: 'INBOX', details: doneAction };
+
+                doneAction = findAndClick(unreadTerms);
+                if (doneAction) return { type: 'UNREAD', details: doneAction };
+
+                const more = document.querySelector('div[aria-label*="Xem thêm" i], div[aria-label*="More" i]');
+                if (more) { more.click(); return { type: 'MORE' }; }
+                return { type: 'NONE' };
             });
 
-            if (info && info.profileLink) await new Promise(resolve => setTimeout(resolve, 800));
-
-            // Chỉ click trong menu nếu chưa tìm thấy ở ngoài
-            await page.evaluate(() => {
-                const safeTerms = [
-                    'đánh dấu là chưa đọc', 'mark as unread',
-                    'đưa vào hộp thư đến', 'move to inbox'
-                ];
-
-                const menuItems = Array.from(document.querySelectorAll('div[role="menuitem"], span, div'));
-                for (const item of menuItems) {
-                    const t = (item.textContent || '').toLowerCase();
-                    const l = (item.getAttribute('aria-label') || '').toLowerCase();
-                    const fullText = t + ' ' + l;
-
-                    if (safeTerms.some(term => fullText.includes(term))) {
-                        item.click();
-                        console.log('[Scraper] ✅ Clicked SAFE menu item:', t || l);
-                        break;
+            if (actionResult.type === 'MORE') {
+                await new Promise(r => setTimeout(r, 1000));
+                const menuAction = await page.evaluate(() => {
+                    const terms = ['thư mục chính', 'hộp thư đến', 'chưa đọc', 'bỏ lưu trữ'];
+                    const items = Array.from(document.querySelectorAll('div[role="menuitem"], span, div'));
+                    for (const item of items) {
+                        if (item.textContent.length > 30) continue;
+                        const ctx = (item.textContent + ' ' + (item.getAttribute('aria-label') || '')).toLowerCase();
+                        if (terms.some(t => ctx.includes(t))) {
+                            item.click();
+                            return ctx;
+                        }
                     }
-                }
-            });
-        } catch (e) {
-            console.error('[Scraper] Error during unread action:', e.message);
-        }
+                    return null;
+                });
+                if (menuAction) console.log(`[Scraper] ✅ Bấm trong Menu: ${menuAction}`);
+            } else if (actionResult.type !== 'NONE') {
+                console.log(`[Scraper] ✅ Hành động: ${actionResult.type} (${actionResult.details})`);
+            }
+        } catch (err) { }
 
         return info;
     } catch (e) {
-        console.error(`[Scraper] Exception:`, e.message);
         return null;
     } finally {
         if (browser) await browser.close();
