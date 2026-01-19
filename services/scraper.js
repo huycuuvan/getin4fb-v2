@@ -147,10 +147,13 @@ async function scrapeProfileLink(psid, senderName, pageId) {
 
                 for (const btn of allButtons) {
                     const txt = btn.textContent.trim().toLowerCase();
-                    if (unreadTerms.includes(txt)) {
+                    const label = (btn.getAttribute('aria-label') || '').toLowerCase();
+
+                    // Kiểm tra cả Text hiển thị và Nhãn ẩn (aria-label)
+                    if (unreadTerms.some(term => txt.includes(term) || label.includes(term))) {
                         btn.click();
                         foundUnread = true;
-                        console.log('Clicked:', txt);
+                        console.log('[Scraper] Clicked unread/inbox button:', txt || label);
                         break;
                     }
                 }
@@ -176,8 +179,10 @@ async function scrapeProfileLink(psid, senderName, pageId) {
                 const menuItems = Array.from(document.querySelectorAll('div[role="menuitem"], span, div'));
                 for (const item of menuItems) {
                     const t = item.textContent.toLowerCase();
-                    if (unreadTerms.includes(t)) {
+                    const l = (item.getAttribute('aria-label') || '').toLowerCase();
+                    if (unreadTerms.some(term => t.includes(term) || l.includes(term))) {
                         item.click();
+                        console.log('[Scraper] Clicked menu item:', t || l);
                         break;
                     }
                 }
