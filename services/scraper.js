@@ -139,50 +139,67 @@ async function scrapeProfileLink(psid, senderName, pageId) {
                 let foundUnread = false;
 
                 // Tìm và click các nút lôi tin nhắn ra Inbox
-                const unreadTerms = [
+                // TỪ KHÓA AN TOÀN (Safe Keywords) - Chỉ bấm vào những nút này
+                const safeTerms = [
                     'đánh dấu là chưa đọc', 'mark as unread',
-                    'đưa vào hộp thư đến', 'move to inbox',
-                    'đánh dấu là chưa xong', 'mark as not done'
+                    'đưa vào hộp thư đến', 'move to inbox'
                 ];
 
-                for (const btn of allButtons) {
-                    const txt = btn.textContent.trim().toLowerCase();
-                    const label = (btn.getAttribute('aria-label') || '').toLowerCase();
+                // TỪ KHÓA NGUY HIỂM (Danger Keywords) - Tuyệt đối tránh
+                // Nút tích V (Done) thường có nhãn: "Xong", "Done", "Move to Done", "Hoàn thành"
+                const dangerTerms = ['xong', 'done', 'check', 'tích', 'complete', 'hoàn thành'];
 
-                    // Kiểm tra cả Text hiển thị và Nhãn ẩn (aria-label)
-                    if (unreadTerms.some(term => txt.includes(term) || label.includes(term))) {
+                for (const btn of allButtons) {
+                    const txt = (btn.textContent || '').trim().toLowerCase();
+                    const label = (btn.getAttribute('aria-label') || '').toLowerCase();
+                    const fullText = txt + ' ' + label;
+
+                    // 1. Phải chứa từ khóa AN TOÀN
+                    const isSafe = safeTerms.some(term => fullText.includes(term));
+
+                    // 2. Tuyệt đối KHÔNG ĐƯỢC chứa từ khóa nguy hiểm đứng một mình 
+                    // (Ví dụ: "Đánh dấu là Xong" -> NGUY HIỂM. "Chưa Xong" -> OK nhưng tốt nhất né luôn từ Xong cho lành)
+                    const isDangerous = dangerTerms.some(d => fullText === d || label === d || txt === d);
+
+                    // Đặc biệt né nút có icon Tick/Check nếu không chắc chắn
+                    const hasCheckIcon = btn.querySelector('i[class*="check"], svg[class*="check"]');
+
+                    if (isSafe && !isDangerous && !hasCheckIcon) {
                         btn.click();
                         foundUnread = true;
-                        console.log('[Scraper] Clicked unread/inbox button:', txt || label);
+                        console.log('[Scraper] ✅ Clicked SAFE button:', txt || label);
                         break;
                     }
                 }
 
-                // 2. Nếu không thấy nút ngoài, mở menu "Ba chấm"
+                // 2. Nếu không thấy nút tính năng, mở menu "Ba chấm" (...)
                 if (!foundUnread) {
-                    const more = document.querySelector('div[aria-label="Xem thêm" i], div[aria-label="More" i], div[aria-label*="Menu"]');
+                    // Tìm nút More/Ba chấm/Menu - Tránh nhầm với nút khác
+                    const more = document.querySelector('div[aria-label="Xem thêm" i], div[aria-label="More" i], div[aria-label="Hành động khác" i]');
                     if (more) {
                         more.click();
                     }
                 }
             });
 
-            if (info && info.profileLink) await new Promise(resolve => setTimeout(resolve, 1000));
+            if (info && info.profileLink) await new Promise(resolve => setTimeout(resolve, 800));
 
             // Chỉ click trong menu nếu chưa tìm thấy ở ngoài
             await page.evaluate(() => {
-                const unreadTerms = [
+                const safeTerms = [
                     'đánh dấu là chưa đọc', 'mark as unread',
-                    'đưa vào hộp thư đến', 'move to inbox',
-                    'đánh dấu là chưa xong', 'mark as not done'
+                    'đưa vào hộp thư đến', 'move to inbox'
                 ];
+
                 const menuItems = Array.from(document.querySelectorAll('div[role="menuitem"], span, div'));
                 for (const item of menuItems) {
-                    const t = item.textContent.toLowerCase();
+                    const t = (item.textContent || '').toLowerCase();
                     const l = (item.getAttribute('aria-label') || '').toLowerCase();
-                    if (unreadTerms.some(term => t.includes(term) || l.includes(term))) {
+                    const fullText = t + ' ' + l;
+
+                    if (safeTerms.some(term => fullText.includes(term))) {
                         item.click();
-                        console.log('[Scraper] Clicked menu item:', t || l);
+                        console.log('[Scraper] ✅ Clicked SAFE menu item:', t || l);
                         break;
                     }
                 }
