@@ -40,7 +40,7 @@ async function scrapeProfileLink(psid, senderName, pageId) {
             return null;
         }
 
-        const businessInboxUrl = `https://business.facebook.com/latest/inbox/all?asset_id=${pageId}`;
+        const businessInboxUrl = `https://business.facebook.com/latest/inbox/all?asset_id=${pageId}&selected_item_id=${psid}`;
         await page.goto(businessInboxUrl, { waitUntil: 'networkidle2', timeout: 60000 });
 
         // Kiểm tra xem có bị đá ra trang login không
