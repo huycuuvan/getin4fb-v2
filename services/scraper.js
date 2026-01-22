@@ -37,33 +37,66 @@ async function scrapeProfileLink(psid, senderName, pageId) {
 
         await new Promise(resolve => setTimeout(resolve, 5000));
 
-        // Step 2: Chọn cuộc hội thoại (CHỈ bấm vào Tên hoặc Avatar, né tuyệt đối nút Xong)
-        await page.evaluate(() => {
-            const danger = ['xong', 'done', 'tích', 'complete', 'hoàn thành', 'archive'];
+        // Step 2: Chọn cuộc hội thoại
+        await page.evaluate((targetName) => {
+            const genericNames = ['người dùng facebook', 'facebook user', 'người dùng messenger'];
+            const targetLower = (targetName || '').toLowerCase(); // Tên cần tìm (đã lower)
+
+            // Hàm chuẩn hóa chuỗi (bỏ dấu) để so sánh mượt hơn (nếu cần)
+            function normalize(str) {
+                return str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+            }
+
+            // 1. Kiểm tra xem cuộc hội thoại hiện tại (đã mở sẵn) có đúng là người này không?
+            // (Thường selector header sẽ nằm ở vị trí chính giữa panel)
+            const headerNameEl = document.querySelector('div[role="main"] h2 span, div[role="main"] h2');
+            if (headerNameEl) {
+                const currentHeader = normalize(headerNameEl.textContent);
+                // So sánh tương đối
+                if (currentHeader.includes(normalize(targetName)) || normalize(targetName).includes(currentHeader)) {
+                    // Đã đúng người, không cần click gì cả
+                    return;
+                }
+            }
+
+            // 2. Nếu chưa đúng, tìm trong danh sách bên trái
             const rows = Array.from(document.querySelectorAll('[role="row"], [data-testid*="conversation"]'));
+            let bestRow = null;
 
-            for (const row of rows) {
-                const subElements = Array.from(row.querySelectorAll('span, div, img'));
-                const targetToClick = subElements.find(el => {
-                    const label = (el.getAttribute('aria-label') || '').toLowerCase();
-                    const title = (el.getAttribute('title') || el.title || '').toLowerCase();
-                    const txt = el.textContent.toLowerCase();
-                    const ctx = (label + ' ' + title + ' ' + txt).trim();
+            if (targetName && !genericNames.includes(targetLower)) {
+                for (const row of rows) {
+                    const text = (row.textContent || '').toLowerCase();
+                    // So sánh tên (có dấu và không dấu nếu kỹ, ở đây dùng includes cơ bản trước)
+                    if (text.includes(targetLower)) {
+                        bestRow = row;
+                        break;
+                    }
+                }
+            }
 
-                    if (danger.some(d => ctx.includes(d)) && !ctx.includes('chưa')) return false;
-
+            // 3. Click vào Avatar hoặc Tên trong row đó
+            if (bestRow) {
+                const subElements = Array.from(bestRow.querySelectorAll('span, div, img'));
+                const elementToClick = subElements.find(el => {
                     const style = window.getComputedStyle(el);
                     const isName = el.textContent.length > 2 && (style.fontWeight === 'bold' || style.fontWeight === '700' || el.className.includes('x1vvvo52'));
                     const isAvatar = el.tagName === 'IMG' || (el.className && el.className.includes('avatar'));
                     return isName || isAvatar;
                 });
 
-                if (targetToClick) {
-                    targetToClick.click();
-                    return;
+                if (elementToClick) {
+                    elementToClick.click();
+                } else {
+                    bestRow.click();
                 }
+            } else {
+                // WARN: Không tìm thấy row nào match tên. 
+                // TRƯỚC ĐÂY: Fallback click row đầu tiên -> Gây sai lệch.
+                // GIỜ: Bỏ qua, chấp nhận lấy thông tin của "Conversation hiện tại" (có thể sai) hoặc trả về null sau này.
+                // Tốt nhất là không click bừa.
+                console.warn(`[Scraper-Browser] matchRow: No row found for name "${targetName}". Staying on current view.`);
             }
-        });
+        }, senderName);
 
         await new Promise(resolve => setTimeout(resolve, 3000));
 

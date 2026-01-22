@@ -8,6 +8,9 @@ const { extractPhoneNumber } = require('./utils/helpers');
 const { scrapeProfileLink } = require('./services/scraper');
 const { sendToN8N } = require('./services/apiN8N');
 
+// QUEUE for scraping to prevent concurrency issues (too many browsers / race conditions)
+let scraperQueue = Promise.resolve();
+
 // Load Config
 const configPath = path.resolve(__dirname, 'config.json');
 let config = {};
@@ -51,6 +54,7 @@ app.post('/webhook', async (req, res) => {
     if (body.object === 'page') {
         console.log(`[Webhook] Received update for ${body.entry.length} entries.`);
         for (const entry of body.entry) {
+            console.log('[Webhook] Entry Content:', JSON.stringify(entry, null, 2));
             const pageId = entry.id;
             const pageConfig = config.pages[pageId];
 
@@ -84,10 +88,20 @@ app.post('/webhook', async (req, res) => {
 
             // 2. Xử lý COMMENT (Feed)
             if (entry.changes) {
+                console.log(`[Webhook] Received ${entry.changes.length} changes.`);
                 for (const change of entry.changes) {
+                    console.log('[Webhook] Change detected:', JSON.stringify(change, null, 2));
+
                     if (change.field === 'feed' && change.value.item === 'comment' && change.value.verb === 'add') {
                         const val = change.value;
                         const psid = val.from.id;
+
+                        // CHẶN ADMIN: Nếu người comment chính là Page -> Bỏ qua
+                        if (psid === pageId) {
+                            console.log(`[Comment] Ignored admin reply from Page ${pageId}`);
+                            continue;
+                        }
+
                         const commentId = val.comment_id;
                         const commentText = val.message || '[Comment/Non-text]';
                         const name = val.from.name;
@@ -126,16 +140,39 @@ async function processEvent(pageId, pageConfig, psid, messageId, message, source
         // Delay 2s để tránh bị trùng lặp quá nhanh
         await new Promise(resolve => setTimeout(resolve, 2000));
 
-        // Thử dùng Puppeteer scraper để lấy cả link và tên thật
-        console.log('[Server] Attempting to scrape profile info...');
-        const scrapedInfo = await scrapeProfileLink(psid, userInfo.fullName, pageId);
+        // Thử dùng Puppeteer scraper để lấy cả link và tên thật (QUEUE SEQUENTIAL)
+        console.log('[Server] Attempting to scrape profile info (Queued)...');
+
+        let scrapedInfo = null;
+        try {
+            // Append task to queue and wait for it to finish
+            scrapedInfo = await scraperQueue.then(async () => {
+                console.log(`[Queue] Starting scrape for ${userInfo.fullName}...`);
+                const result = await scrapeProfileLink(psid, userInfo.fullName, pageId);
+                // Delay nhỏ giữa các lần scrape để browser kịp đóng/mở clean
+                await new Promise(r => setTimeout(r, 2000));
+                return result;
+            }).catch(err => {
+                console.error('[Queue] Scrape failed:', err);
+                return null;
+            });
+        } catch (err) {
+            console.error('[Server] Queue error:', err);
+        }
 
         if (scrapedInfo) {
             profileLink = scrapedInfo.profileLink;
-            // Cập nhật tên thật nếu lấy được từ Scraper (tránh "Người dùng Messenger")
-            if (scrapedInfo.customerName && scrapedInfo.customerName !== 'Người dùng Messenger') {
+            // Cập nhật tên thật nếu lấy được từ Scraper (Chỉ khi tên hiện tại chưa có hoặc là placeholder)
+            const placeholders = ['người dùng facebook', 'facebook user', 'người dùng messenger'];
+            const currentNameLower = (userInfo.fullName || '').toLowerCase();
+
+            if (scrapedInfo.customerName &&
+                (!userInfo.fullName || placeholders.includes(currentNameLower)) &&
+                scrapedInfo.customerName !== 'Người dùng Messenger') {
                 console.log(`[Server] Updating name from Scraper: ${userInfo.fullName} -> ${scrapedInfo.customerName}`);
                 userInfo.fullName = scrapedInfo.customerName;
+            } else {
+                console.log(`[Server] Kept Webhook name: ${userInfo.fullName} (Scraper found: ${scrapedInfo.customerName})`);
             }
         }
     }
