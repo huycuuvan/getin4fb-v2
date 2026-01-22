@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="vi">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Đăng nhập hệ thống | GetLinkFB</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        body {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .login-card {
+            background: white;
+            padding: 40px;
+            border-radius: 15px;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
+            width: 100%;
+            max-width: 400px;
+        }
+
+        .logo-area {
+            text-align: center;
+            margin-bottom: 30px;
+            color: #764ba2;
+        }
+
+        .btn-login {
+            background: #764ba2;
+            border: none;
+        }
+
+        .btn-login:hover {
+            background: #5b3a7d;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="login-card">
+        <div class="logo-area">
+            <i class="fab fa-facebook-messenger fa-3x"></i>
+            <h3 class="mt-2 fw-bold">Admin Panel</h3>
+            <p class="text-muted">Đăng nhập để quản lý Fanpage</p>
+        </div>
+        <form id="loginForm">
+            <div class="mb-3">
+                <label class="form-label">Tên đăng nhập</label>
+                <div class="input-group">
+                    <span class="input-group-text"><i class="fas fa-user"></i></span>
+                    <input type="text" class="form-control" id="username" placeholder="Nhập username" required>
+                </div>
+            </div>
+            <div class="mb-4">
+                <label class="form-label">Mật khẩu</label>
+                <div class="input-group">
+                    <span class="input-group-text"><i class="fas fa-lock"></i></span>
+                    <input type="password" class="form-control" id="password" placeholder="Nhập password" required>
+                </div>
+            </div>
+            <button type="submit" class="btn btn-primary btn-login w-100 py-2 fw-bold">
+                <i class="fas fa-sign-in-alt me-2"></i> Đăng nhập
+            </button>
+        </form>
+    </div>
+
+    <!-- SweetAlert2 -->
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <script>
+        document.getElementById('loginForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+
+            try {
+                const res = await fetch('/api/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password })
+                });
+                const data = await res.json();
+
+                if (data.success) {
+                    Swal.fire({
+                        icon: 'success',
+                        title: 'Thành công',
+                        text: 'Đang chuyển hướng...',
+                        timer: 1000,
+                        showConfirmButton: false
+                    }).then(() => {
+                        window.location.href = '/admin';
+                    });
+                } else {
+                    Swal.fire('Lỗi', 'Sai tên đăng nhập hoặc mật khẩu!', 'error');
+                }
+            } catch (err) {
+                Swal.fire('Lỗi', 'Không thể kết nối Server', 'error');
+            }
+        });
+    </script>
+</body>
+
+</html>

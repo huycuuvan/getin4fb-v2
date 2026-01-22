@@ -2,6 +2,7 @@ const express = require('express');
 const bodyParser = require('body-parser');
 const fs = require('fs');
 const path = require('path');
+const cookieParser = require('cookie-parser');
 const { getSenderInfoFromMessage, generateProfileLink, generateAdminChatLink, passThreadControl } = require('./services/facebook');
 const { appendToSheet } = require('./services/googleSheets');
 const { extractPhoneNumber } = require('./utils/helpers');
@@ -30,6 +31,113 @@ loadConfig();
 
 const app = express();
 app.use(bodyParser.json());
+app.use(cookieParser());
+app.use(express.static(path.join(__dirname, 'public'))); // Serve tĩnh (login.html, admin.html)
+
+// --- ADMIN AUTH & API ---
+
+const ADMIN_USER = 'admin';
+const ADMIN_PASS = 'admin123'; // Đổi pass ở đây
+const COOKIE_SECRET = 'my_super_secret_key_fb_tool';
+
+// Middleware Check Login
+const authMiddleware = (req, res, next) => {
+    // Nếu có cookie auth đúng thì cho qua
+    if (req.cookies && req.cookies.auth === COOKIE_SECRET) {
+        return next();
+    }
+    // Nếu là API call thì trả 401
+    if (req.path.startsWith('/api/')) {
+        return res.status(401).json({ success: false, message: 'Unauthorized' });
+    }
+    // Nếu truy cập trang web admin thì redirect về login
+    res.redirect('/login.html');
+};
+
+// Route: Login Page (Direct link)
+app.get('/login', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public/login.html'));
+});
+
+// Route: Admin Page (Protected)
+app.get('/admin', authMiddleware, (req, res) => {
+    res.sendFile(path.join(__dirname, 'public/admin.html'));
+});
+
+// API: Login Process
+app.post('/api/login', (req, res) => {
+    const { username, password } = req.body;
+    if (username === ADMIN_USER && password === ADMIN_PASS) {
+        res.cookie('auth', COOKIE_SECRET, { httpOnly: true, maxAge: 24 * 60 * 60 * 1000 }); // 1 ngày
+        return res.json({ success: true });
+    }
+    res.json({ success: false, message: 'Invalid credentials' });
+});
+
+// API: Logout
+app.get('/api/logout', (req, res) => {
+    res.clearCookie('auth');
+    res.json({ success: true });
+});
+
+// API Read Config (Protected)
+app.get('/api/config', authMiddleware, (req, res) => {
+    try {
+        const freshConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+        res.json(freshConfig);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// API Update Config (Protected)
+app.post('/api/config', authMiddleware, (req, res) => {
+    try {
+        const { id, name, token, spreadsheet_id, sheet_name } = req.body;
+        if (!id || !token) return res.status(400).json({ success: false, message: 'Missing ID or Token' });
+
+        const currentConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+
+        currentConfig.pages = currentConfig.pages || {};
+        currentConfig.pages[id] = {
+            name,
+            page_access_token: token,
+            spreadsheet_id: spreadsheet_id || '1-vceGSIV4MvfznSv8062YfwAU29tL8B9N7QPMyK6stg',
+            sheet_name: sheet_name || 'Sheet1'
+        };
+
+        fs.writeFileSync(configPath, JSON.stringify(currentConfig, null, 4), 'utf8');
+        console.log(`[Admin] Updated config for page ${name} (${id})`);
+
+        config = currentConfig;
+        res.json({ success: true });
+    } catch (e) {
+        console.error(e);
+        res.status(500).json({ success: false, message: e.message });
+    }
+});
+
+// API Delete Page (Protected)
+app.post('/api/config/delete', authMiddleware, (req, res) => {
+    try {
+        const { id } = req.body;
+        const currentConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+
+        if (currentConfig.pages && currentConfig.pages[id]) {
+            delete currentConfig.pages[id];
+            fs.writeFileSync(configPath, JSON.stringify(currentConfig, null, 4), 'utf8');
+            config = currentConfig;
+            console.log(`[Admin] Deleted page ID ${id}`);
+            res.json({ success: true });
+        } else {
+            res.status(404).json({ success: false, message: 'Page ID not found' });
+        }
+    } catch (e) {
+        res.status(500).json({ success: false, message: e.message });
+    }
+});
+
+// --- END ADMIN UI ---
 
 // 1. Webhook Verification & Receiving
 app.get('/webhook', (req, res) => {

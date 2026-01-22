@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="vi">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quản trị Hệ thống | GetLinkFB</title>
+    <!-- CSS Libs -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <link href="https://cdn.datatables.net/1.13.4/css/dataTables.bootstrap5.min.css" rel="stylesheet">
+    <style>
+        body {
+            background-color: #f3f4f6;
+            padding-bottom: 50px;
+        }
+
+        .navbar {
+            background: #764ba2;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+
+        .navbar-brand {
+            font-weight: bold;
+            color: white !important;
+        }
+
+        .card {
+            border: none;
+            border-radius: 10px;
+            box-shadow: 0 2px 15px rgba(0, 0, 0, 0.05);
+        }
+
+        .token-cell {
+            max-width: 150px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            cursor: pointer;
+            color: #666;
+            font-family: monospace;
+        }
+
+        .token-cell:hover {
+            color: #000;
+            background: #eee;
+        }
+
+        .btn-logout {
+            color: rgba(255, 255, 255, 0.8);
+        }
+
+        .btn-logout:hover {
+            color: white;
+        }
+    </style>
+</head>
+
+<body>
+
+    <!-- Navbar -->
+    <nav class="navbar navbar-expand-lg navbar-dark mb-4">
+        <div class="container">
+            <a class="navbar-brand" href="#"><i class="fas fa-robot me-2"></i> FB Scraper Manager</a>
+            <div class="d-flex">
+                <span class="navbar-text me-3 text-white">Xin chào, Admin</span>
+                <button class="btn btn-sm btn-outline-light" onclick="logout()">
+                    <i class="fas fa-sign-out-alt"></i> Đăng xuất
+                </button>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container">
+        <!-- Header & Action -->
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h4 class="text-secondary"><i class="fas fa-list-alt me-2"></i> Danh sách Fanpage kết nối</h4>
+            <button class="btn btn-primary shadow-sm" onclick="openModal()">
+                <i class="fas fa-plus-circle me-2"></i> Thêm Page Mới
+            </button>
+        </div>
+
+        <!-- Main Table Card -->
+        <div class="card p-3">
+            <div class="table-responsive">
+                <table id="pageTable" class="table table-hover align-middle">
+                    <thead class="table-light">
+                        <tr>
+                            <th style="width: 25%">Tên Fanpage</th>
+                            <th style="width: 15%">Page ID</th>
+                            <!-- <th style="width: 20%">Sheet ID</th> -->
+                            <th style="width: 20%">Token (Rút gọn)</th>
+                            <th style="width: 20%" class="text-end">Hành động</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tableBody">
+                        <tr>
+                            <td colspan="5" class="text-center py-4">Đang tải dữ liệu...</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Form -->
+    <div class="modal fade" id="configModal" tabindex="-1">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header bg-primary text-white">
+                    <h5 class="modal-title" id="modalTitle">Thêm / Cập nhật Page</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="configForm">
+                        <div class="row g-3">
+                            <div class="col-md-6">
+                                <label class="form-label fw-bold">Tên Fanpage</label>
+                                <input type="text" class="form-control" id="pageName"
+                                    placeholder="Ví dụ: Shop Quần Áo XYZ" required>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label fw-bold">Page ID (Bắt buộc)</label>
+                                <input type="text" class="form-control" id="pageId" placeholder="VD: 100234..."
+                                    required>
+                                <small class="text-danger" id="idWarning" style="display:none">Không sửa ID khi cập
+                                    nhật</small>
+                            </div>
+                            <div class="col-12">
+                                <label class="form-label fw-bold">Page Access Token</label>
+                                <textarea class="form-control" id="pageToken" rows="3" placeholder="EAAME..."
+                                    required></textarea>
+                            </div>
+                            <!-- Ẩn Sheet ID và Name, set mặc định -->
+                            <div class="col-md-8 d-none">
+                                <label class="form-label fw-bold">Google Sheet ID</label>
+                                <input type="text" class="form-control" id="sheetId"
+                                    value="1-vceGSIV4MvfznSv8062YfwAU29tL8B9N7QPMyK6stg">
+                            </div>
+                            <div class="col-md-4 d-none">
+                                <label class="form-label fw-bold">Tên Sheet (Tab)</label>
+                                <input type="text" class="form-control" id="sheetName" value="Sheet1">
+                            </div>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer bg-light">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Hủy</button>
+                    <button type="button" class="btn btn-primary" onclick="saveConfig()">
+                        <i class="fas fa-save me-2"></i> Lưu Cấu Hình
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- JS Libs -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+
+    <script>
+        const API_URL = '/api/config';
+        let configModal;
+        let isEditMode = false;
+        let globalPages = {};
+
+        document.addEventListener('DOMContentLoaded', () => {
+            configModal = new bootstrap.Modal(document.getElementById('configModal'), { backdrop: 'static' });
+            loadData();
+        });
+
+        async function loadData() {
+            try {
+                const res = await fetch(API_URL);
+                if (res.status === 401) {
+                    window.location.href = '/login';
+                    return;
+                }
+                const data = await res.json();
+                renderTable(data.pages || {});
+            } catch (err) {
+                Swal.fire('Lỗi', 'Không thể tải dữ liệu', 'error');
+            }
+        }
+
+        function renderTable(pages) {
+            globalPages = pages;
+            const tbody = document.getElementById('tableBody');
+            tbody.innerHTML = '';
+
+            const keys = Object.keys(pages);
+            if (keys.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="5" class="text-center py-4 text-muted">Chưa có Page nào. Hãy bấm "Thêm Page Mới"</td></tr>';
+                return;
+            }
+
+            keys.forEach(id => {
+                const p = pages[id];
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td class="fw-bold text-primary">${p.name}</td>
+                    <td><span class="badge bg-secondary">${id}</span></td>
+                  
+                    <td><div class="token-cell" title="${p.page_access_token}">${p.page_access_token}</div></td>
+                    <td class="text-end">
+                        <button class="btn btn-sm btn-outline-primary me-2" onclick="openEdit('${id}')">
+                            <i class="fas fa-edit"></i>
+                        </button>
+                        <button class="btn btn-sm btn-outline-danger" onclick="deletePage('${id}')">
+                            <i class="fas fa-trash"></i>
+                        </button>
+                    </td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        function openModal() {
+            isEditMode = false;
+            document.getElementById('modalTitle').innerText = 'Thêm Fanpage Mới';
+            document.getElementById('configForm').reset();
+            document.getElementById('pageId').disabled = false;
+            document.getElementById('idWarning').style.display = 'none';
+            configModal.show();
+        }
+
+        function openEdit(id) {
+            const p = globalPages[id];
+            if (!p) return;
+
+            isEditMode = true;
+            document.getElementById('modalTitle').innerText = 'Cập nhật Fanpage';
+
+            document.getElementById('pageId').value = id;
+            document.getElementById('pageId').disabled = true; // Không cho sửa ID khi update
+            document.getElementById('idWarning').style.display = 'block';
+
+            document.getElementById('pageName').value = p.name;
+            document.getElementById('pageToken').value = p.page_access_token;
+            document.getElementById('sheetId').value = p.spreadsheet_id;
+            document.getElementById('sheetName').value = p.sheet_name;
+
+            configModal.show();
+        }
+
+        async function saveConfig() {
+            const id = document.getElementById('pageId').value.trim();
+            const name = document.getElementById('pageName').value.trim();
+            const token = document.getElementById('pageToken').value.trim();
+            const sheetId = document.getElementById('sheetId').value.trim();
+            const sheetName = document.getElementById('sheetName').value.trim();
+
+            if (!id || !name || !token || !sheetId) {
+                Swal.fire('Thiếu thông tin', 'Vui lòng điền đầy đủ các trường bắt buộc', 'warning');
+                return;
+            }
+
+            const payload = { id, name, token, spreadsheet_id: sheetId, sheet_name: sheetName };
+
+            // Hiển thị loading
+            Swal.fire({
+                title: 'Đang lưu...',
+                text: 'Hệ thống sẽ khởi động lại để áp dụng.',
+                allowOutsideClick: false,
+                didOpen: () => Swal.showLoading()
+            });
+
+            try {
+                const res = await fetch(API_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const result = await res.json();
+
+                if (result.success) {
+                    configModal.hide();
+                    await Swal.fire({
+                        icon: 'success',
+                        title: 'Đã lưu thành công!',
+                        text: 'Server đang khởi động lại...',
+                        timer: 2000,
+                        showConfirmButton: false
+                    });
+                    setTimeout(loadData, 2000);
+                } else {
+                    Swal.fire('Lỗi', result.message, 'error');
+                }
+            } catch (err) {
+                Swal.fire('Lỗi', err.message, 'error');
+            }
+        }
+
+        async function deletePage(id) {
+            const result = await Swal.fire({
+                title: 'Xác nhận xóa?',
+                text: `Bạn có chắc muốn xóa page ID ${id} không?`,
+                icon: 'warning',
+                showCancelButton: true,
+                confirmButtonColor: '#d33',
+                confirmButtonText: 'Xóa luôn',
+                cancelButtonText: 'Hủy'
+            });
+
+            if (result.isConfirmed) {
+                try {
+                    const res = await fetch(API_URL + '/delete', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ id })
+                    });
+                    const data = await res.json();
+                    if (data.success) {
+                        Swal.fire('Đã xóa!', '', 'success');
+                        loadData();
+                    } else {
+                        Swal.fire('Lỗi', data.message, 'error');
+                    }
+                } catch (err) {
+                    Swal.fire('Lỗi', err.message, 'error');
+                }
+            }
+        }
+
+        async function logout() {
+            await fetch('/api/logout');
+            window.location.href = '/login';
+        }
+    </script>
+</body>
+
+</html>
