@@ -19,10 +19,20 @@ async function scrapeProfileLink(psid, senderName, pageId) {
         await page.setViewport({ width: 1920, height: 1080 });
 
         if (fs.existsSync(COOKIES_PATH)) {
-            const cookies = JSON.parse(fs.readFileSync(COOKIES_PATH, 'utf8'));
+            let cookiesData = JSON.parse(fs.readFileSync(COOKIES_PATH, 'utf8'));
+
+            // Xử lý định dạng J2TEAM Cookies (Object chứa trường cookies)
+            // Nếu là mảng thì dùng luôn, nếu là Object có key 'cookies' thì lấy key đó
+            const cookies = Array.isArray(cookiesData) ? cookiesData : (cookiesData.cookies || []);
+
+            if (cookies.length === 0) {
+                console.warn('[Scraper] ⚠️ Cookies file is empty or invalid format.');
+                return null;
+            }
+
             await page.setCookie(...cookies);
         } else {
-            console.warn('[Scraper] ⚠️ No cookies found.');
+            console.warn('[Scraper] ⚠️ No cookies.json found.');
             return null;
         }
 

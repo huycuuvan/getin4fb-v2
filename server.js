@@ -137,6 +137,29 @@ app.post('/api/config/delete', authMiddleware, (req, res) => {
     }
 });
 
+// API Update Cookies (Protected)
+app.post('/api/cookies', authMiddleware, (req, res) => {
+    try {
+        const { cookies } = req.body;
+        if (!cookies) return res.status(400).json({ success: false, message: 'Missing cookie data' });
+
+        // Validate JSON format
+        try {
+            JSON.parse(cookies);
+        } catch (e) {
+            return res.status(400).json({ success: false, message: 'Invalid JSON format' });
+        }
+
+        const cookiesFilePath = path.resolve(__dirname, 'cookies.json');
+        fs.writeFileSync(cookiesFilePath, cookies, 'utf8');
+        console.log('[Admin] Cookies updated via UI.');
+        res.json({ success: true });
+    } catch (e) {
+        console.error(e);
+        res.status(500).json({ success: false, message: e.message });
+    }
+});
+
 // --- END ADMIN UI ---
 
 // 1. Webhook Verification & Receiving

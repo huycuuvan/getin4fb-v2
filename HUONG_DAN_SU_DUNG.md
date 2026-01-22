@@ -31,13 +31,17 @@ Tài liệu này hướng dẫn cách duy trì hoạt động cho hệ thống t
 3.  Chọn nút **Export** (Xuất) -> Chọn **JSON**.
 4.  Máy sẽ copy một đoạn mã dài vào bộ nhớ tạm (Clipboard).
 
-**Bước 3: Cập nhật vào phần mềm**
-1.  Mở file có tên `cookies.json` trong thư mục phần mềm (bằng Notepad).
-2.  Xóa sạch nội dung cũ bên trong.
-3.  Dán (Paste) đoạn mã vừa copy ở Bước 2 vào.
-4.  Bấm **Save (Lưu lại)**.
+**Bước 3: Cập nhật vào hệ thống (Cách mới - Khuyên dùng)**
+1.  Truy cập trang Quản trị: `http://<IP_Server>:4000/admin`.
+2.  Bấm nút **"Cập nhật Cookies"** (màu vàng).
+3.  Dán (Paste) toàn bộ đoạn mã vừa copy ở Bước 2 vào ô trống.
+4.  Bấm **"Lưu Cookies"**. Hệ thống sẽ báo "Thành công".
 
-*Sau khi lưu file, hệ thống sẽ tự động cập nhật lại chìa khóa mới. Bạn không cần làm gì thêm.*
+**Cách 2: Cập nhật thủ công (Dành cho kỹ thuật)**
+1.  Mở file có tên `cookies.json` trong thư mục phần mềm (bằng Notepad).
+2.  Xóa sạch nội dung cũ bên trong và dán đoạn mã mới vào -> Lưu lại.
+
+*Sau khi cập nhật (bằng bất kỳ cách nào), hệ thống sẽ tự động sử dụng chìa khóa mới ngay lập tức.*
 
 ---
 
@@ -59,44 +63,40 @@ Tài liệu này hướng dẫn cách duy trì hoạt động cho hệ thống t
 
 ---
 
-## 5. Hướng dẫn thêm Fanpage Mới (Dành cho người biết kỹ thuật)
+## 5. Hướng dẫn quản lý Fanpage (Thêm/Sửa/Xóa)
 
-Để thêm một Page mới vào hệ thống, bạn cần truy cập vào Server và sửa file cấu hình.
+Hệ thống đã tích hợp giao diện quản trị (Admin Panel) giúp bạn quản lý danh sách Fanpage dễ dàng mà không cần động vào mã nguồn.
 
-**Bước 1: Chuẩn bị thông tin**
-- **Page ID** của trang mới.
-- **Page Access Token** (Lấy từ Facebook Developer - Graph API).
-- **ID Google Sheet** muốn đổ dữ liệu về.
+### 5.1. Truy cập trang Quản trị
+1.  **Đường dẫn:** `http://<IP_Server_Của_Bạn>:4000/admin` (hoặc đường dẫn Ngrok nếu dùng bản miễn phí).
+2.  **Thông tin đăng nhập:**
+    *   **Tên đăng nhập:** `admin`
+    *   **Mật khẩu:** `admin123`
 
-**Bước 2: Truy cập Server**
-1. Mở phần mềm SSH (ví dụ: Putty hoặc Terminal).
-2. Kết nối vào Server: `ssh root@<IP_CUA_BAN>`
-3. Nhập mật khẩu.
+### 5.2. Các chức năng chính
+*   **Thêm Page mới:** Bấm nút **"Thêm Page Mới"**, điền Tên Page, ID và Token. Các trường Google Sheet đã được để mặc định (ẩn đi), bạn không cần quan tâm.
+*   **Sửa cấu hình:** Bấm biểu tượng 📝 (Sửa) trên dòng của Page đó để cập nhật lại Token nếu Page bị đổi Token.
+*   **Xóa Page:** Bấm biểu tượng 🗑️ (Thùng rác) để gỡ bỏ Page khỏi hệ thống quét.
 
-**Bước 3: Truy cập thư mục phần mềm**
-Gõ lệnh sau để vào thư mục chứa code (Ví dụ thư mục là `getlinkfb`):
-```bash
-cd getlinkfb
-```
+*Lưu ý: Sau khi bấm "Lưu", hệ thống sẽ tự động khởi động lại sau 2 giây để áp dụng thay đổi.*
 
-**Bước 4: Sửa file cấu hình**
-Dùng trình soạn thảo `nano` để mở file:
-```bash
-nano config.json
-```
-- Di chuyển mũi tên xuống phần `"pages": { ... }`.
-- Copy một đoạn cấu hình của Page cũ và dán thêm vào dưới cùng (nhớ có dấu phẩy `,` ngăn cách giữa các pages).
-- Sửa lại `Page ID`, `Token`, `Tên Page` cho đúng.
-- Bấm **Ctrl + O** -> **Enter** để Lưu.
-- Bấm **Ctrl + X** để Thoát.
+---
 
-**Bước 5: Khởi động lại hệ thống**
-Gõ lệnh sau để hệ thống nhận cấu hình mới:
-```bash
-pm2 restart all
-```
-*(Nếu thấy hiện chữ `online` màu xanh là thành công)*
+## 6. Lưu ý kỹ thuật dành cho người cài đặt (SSH & CLI)
+
+Nếu không thể truy cập giao diện Web, bạn vẫn có thể thao tác bằng dòng lệnh:
+
+1.  **Sửa thủ công:** `cd` vào thư mục dự án -> `nano config.json`.
+2.  **Xem Log (Lịch sử chạy):** Để xem hệ thống có đang quét hay không, gõ:
+    ```bash
+    pm2 logs fb-tool
+    ```
+3.  **Khởi động lại toàn bộ:**
+    ```bash
+    pm2 restart all
+    ```
 
 ---
 
 **Cần hỗ trợ kỹ thuật, liên hệ:** Nguyễn Đình Huy - 0867868546
+

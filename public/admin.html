@@ -75,9 +75,38 @@
         <!-- Header & Action -->
         <div class="d-flex justify-content-between align-items-center mb-4">
             <h4 class="text-secondary"><i class="fas fa-list-alt me-2"></i> Danh sách Fanpage kết nối</h4>
-            <button class="btn btn-primary shadow-sm" onclick="openModal()">
-                <i class="fas fa-plus-circle me-2"></i> Thêm Page Mới
-            </button>
+            <div class="d-flex">
+                <button class="btn btn-outline-warning shadow-sm me-2" onclick="openCookieModal()">
+                    <i class="fas fa-key me-2"></i> Cập nhật Cookies
+                </button>
+                <button class="btn btn-primary shadow-sm" onclick="openModal()">
+                    <i class="fas fa-plus-circle me-2"></i> Thêm Page Mới
+                </button>
+            </div>
+        </div>
+        ...
+        <!-- Modal Cookies -->
+        <div class="modal fade" id="cookieModal" tabindex="-1">
+            <div class="modal-dialog modal-lg">
+                <div class="modal-content">
+                    <div class="modal-header bg-warning text-dark">
+                        <h5 class="modal-title fw-bold"><i class="fas fa-key me-2"></i> Cập nhật Cookies Facebook</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                    </div>
+                    <div class="modal-body">
+                        <p class="text-muted small">Mở J2TEAM Cookies -> Export JSON -> Copy toàn bộ nội dung và dán vào
+                            ô dưới đây.</p>
+                        <textarea class="form-control" id="cookieData" rows="12"
+                            placeholder='{"url": "https://www.facebook.com", "cookies": [...] }'></textarea>
+                    </div>
+                    <div class="modal-footer bg-light">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Hủy</button>
+                        <button type="button" class="btn btn-warning fw-bold" onclick="saveCookies()">
+                            <i class="fas fa-save me-2"></i> Lưu Cookies
+                        </button>
+                    </div>
+                </div>
+            </div>
         </div>
 
         <!-- Main Table Card -->
@@ -160,14 +189,51 @@
 
     <script>
         const API_URL = '/api/config';
-        let configModal;
+        let configModal, cookieModal;
         let isEditMode = false;
         let globalPages = {};
 
         document.addEventListener('DOMContentLoaded', () => {
             configModal = new bootstrap.Modal(document.getElementById('configModal'), { backdrop: 'static' });
+            cookieModal = new bootstrap.Modal(document.getElementById('cookieModal'), { backdrop: 'static' });
             loadData();
         });
+
+        function openCookieModal() {
+            document.getElementById('cookieData').value = '';
+            cookieModal.show();
+        }
+
+        async function saveCookies() {
+            const data = document.getElementById('cookieData').value.trim();
+            if (!data) {
+                Swal.fire('Chú ý', 'Vui lòng dán dữ liệu Cookies', 'warning');
+                return;
+            }
+
+            Swal.fire({
+                title: 'Đang lưu Cookies...',
+                allowOutsideClick: false,
+                didOpen: () => Swal.showLoading()
+            });
+
+            try {
+                const res = await fetch('/api/cookies', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ cookies: data })
+                });
+                const result = await res.json();
+                if (result.success) {
+                    cookieModal.hide();
+                    Swal.fire('Thành công', 'Đã cập nhật Cookies mới!', 'success');
+                } else {
+                    Swal.fire('Lỗi', result.message, 'error');
+                }
+            } catch (err) {
+                Swal.fire('Lỗi', 'Không thể kết nối Server', 'error');
+            }
+        }
 
         async function loadData() {
             try {
