@@ -276,17 +276,17 @@ async function processEvent(pageId, pageConfig, psid, messageId, message, source
 
         let scrapedInfo = null;
         try {
-            // CƠ CHẾ QUEUE ĐÚNG: Gán lại promise vào biến scraperQueue
-            scraperQueue = scraperQueue.then(async () => {
-                console.log(`[Queue] Starting scrape for ${userInfo.fullName} (ID: ${psid})...`);
+            // Append task to queue and wait for it to finish
+            scrapedInfo = await scraperQueue.then(async () => {
+                console.log(`[Queue] Starting scrape for ${userInfo.fullName}...`);
                 const result = await scrapeProfileLink(psid, userInfo.fullName, pageId);
-                // Nghỉ 2s giữa các lần quét để ổn định hệ thống
+                // Delay nhỏ giữa các lần scrape để browser kịp đóng/mở clean
                 await new Promise(r => setTimeout(r, 2000));
                 return result;
+            }).catch(err => {
+                console.error('[Queue] Scrape failed:', err);
+                return null;
             });
-
-            // Đợi kết quả của chính tác vụ vừa đưa vào queue
-            scrapedInfo = await scraperQueue;
         } catch (err) {
             console.error('[Server] Queue error:', err);
         }
