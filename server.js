@@ -223,21 +223,15 @@ app.post('/webhook', async (req, res) => {
                         processEvent(pageId, pageConfig, psid, messageId, messageText, mode).catch(err => {
                             console.error(`[Error] Event processing failed:`, err.message);
                         });
-                    } else {
-                        // Log các event khác để debug (read, delivery, referral, v.v.)
-                        const eventType = Object.keys(webhook_event).find(k => k !== 'sender' && k !== 'recipient' && k !== 'timestamp');
-                        if (eventType) console.log(`[Webhook] Ignored event type: ${eventType} from ${webhook_event.sender?.id}`);
                     }
                 }
             }
 
             // 2. Xử lý COMMENT (Feed)
             if (entry.changes) {
-                console.log(`[Webhook] Received ${entry.changes.length} changes.`);
                 for (const change of entry.changes) {
-                    console.log('[Webhook] Change detected:', JSON.stringify(change, null, 2));
-
                     if (change.field === 'feed' && change.value.item === 'comment' && change.value.verb === 'add') {
+                        console.log('[Webhook] Change detected:', JSON.stringify(change, null, 2));
                         const val = change.value;
                         const psid = val.from.id;
 
