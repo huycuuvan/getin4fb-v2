@@ -45,38 +45,35 @@ async function scrapeProfileLink(psid, senderName, pageId) {
             return null;
         }
 
-        await new Promise(resolve => setTimeout(resolve, 5000));
+        // Đợi 1 chút cho load trang (vẫn cần vì NetworkIdle2 không đảm bảo panel đã render)
+        await new Promise(resolve => setTimeout(resolve, 3000));
 
         // Step 2: Chọn cuộc hội thoại
         await page.evaluate((targetName) => {
             const genericNames = ['người dùng facebook', 'facebook user', 'người dùng messenger'];
             const targetLower = (targetName || '').toLowerCase(); // Tên cần tìm (đã lower)
 
-            // Hàm chuẩn hóa chuỗi (bỏ dấu) để so sánh mượt hơn (nếu cần)
+            // Hàm chuẩn hóa chuỗi (bỏ dấu) để so sánh mượt hơn
             function normalize(str) {
                 return str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
             }
 
             // 1. Kiểm tra xem cuộc hội thoại hiện tại (đã mở sẵn) có đúng là người này không?
-            // (Thường selector header sẽ nằm ở vị trí chính giữa panel)
             const headerNameEl = document.querySelector('div[role="main"] h2 span, div[role="main"] h2');
             if (headerNameEl) {
                 const currentHeader = normalize(headerNameEl.textContent);
-                // So sánh tương đối
                 if (currentHeader.includes(normalize(targetName)) || normalize(targetName).includes(currentHeader)) {
-                    // Đã đúng người, không cần click gì cả
-                    return;
+                    return; // Đã đúng người
                 }
             }
 
-            // 2. Nếu chưa đúng, tìm trong danh sách bên trái
+            // 2. Tìm trong danh sách bên trái
             const rows = Array.from(document.querySelectorAll('[role="row"], [data-testid*="conversation"]'));
             let bestRow = null;
 
             if (targetName && !genericNames.includes(targetLower)) {
                 for (const row of rows) {
                     const text = (row.textContent || '').toLowerCase();
-                    // So sánh tên (có dấu và không dấu nếu kỹ, ở đây dùng includes cơ bản trước)
                     if (text.includes(targetLower)) {
                         bestRow = row;
                         break;
@@ -84,40 +81,24 @@ async function scrapeProfileLink(psid, senderName, pageId) {
                 }
             }
 
-            // 3. Click vào Avatar hoặc Tên trong row đó
             if (bestRow) {
-                const subElements = Array.from(bestRow.querySelectorAll('span, div, img'));
-                const elementToClick = subElements.find(el => {
-                    const style = window.getComputedStyle(el);
-                    const isName = el.textContent.length > 2 && (style.fontWeight === 'bold' || style.fontWeight === '700' || el.className.includes('x1vvvo52'));
-                    const isAvatar = el.tagName === 'IMG' || (el.className && el.className.includes('avatar'));
-                    return isName || isAvatar;
-                });
-
-                if (elementToClick) {
-                    elementToClick.click();
-                } else {
-                    bestRow.click();
-                }
-            } else {
-                // WARN: Không tìm thấy row nào match tên. 
-                // TRƯỚC ĐÂY: Fallback click row đầu tiên -> Gây sai lệch.
-                // GIỜ: Bỏ qua, chấp nhận lấy thông tin của "Conversation hiện tại" (có thể sai) hoặc trả về null sau này.
-                // Tốt nhất là không click bừa.
-                console.warn(`[Scraper-Browser] matchRow: No row found for name "${targetName}". Staying on current view.`);
+                bestRow.click();
             }
         }, senderName);
 
-        await new Promise(resolve => setTimeout(resolve, 3000));
+        // Chờ panel thông tin hiện ra (Nút mở panel hoặc tên người dùng)
+        try {
+            await page.waitForSelector('div[role="heading"][aria-level="3"], div[role="main"] h2', { timeout: 10000 });
+        } catch (e) { }
 
-        // Step 3: Mở Panel thông tin
+        // Step 3: Đảm bảo click vào tên để mở panel chi tiết nếu nó chưa mở
         await page.evaluate((name) => {
             const els = Array.from(document.querySelectorAll('span, div, a'));
             const target = els.find(el => el.textContent.trim() === name || el.textContent.trim() === 'Người dùng Messenger');
             if (target) target.click();
         }, senderName);
 
-        await new Promise(resolve => setTimeout(resolve, 4000));
+        await new Promise(resolve => setTimeout(resolve, 2000));
 
         // Step 4: Lấy Link & Tên (Lọc kỹ để né link Help/System)
         const info = await page.evaluate(async () => {
@@ -128,17 +109,38 @@ async function scrapeProfileLink(psid, senderName, pageId) {
             const links = Array.from(document.querySelectorAll('a'));
 
             // Blacklist các link hệ thống của Facebook
-            const systemPaths = ['/help/', '/policies/', '/legal/', '/about/', '/settings/', '/notifications/', '/messages/', '/ads/', '/business/'];
+            const systemPaths = [
+                '/help/', '/policies/', '/legal/', '/about/', '/settings/',
+                '/notifications/', '/messages/', '/ads/', '/business/',
+                '/login/', '/register/', '/sharer/', '/groups/', '/events/'
+            ];
 
             let bestLink = null;
 
             for (const link of links) {
-                const href = link.href || '';
+                let href = link.href || '';
                 const text = link.textContent.toLowerCase();
+
+                // 0. Xử lý "Self-healing": Nếu là link login redirect (thường do session bị out giữa chừng)
+                if (href.includes('facebook.com/login') && href.includes('next=')) {
+                    try {
+                        const urlObj = new URL(href);
+                        const nextParam = urlObj.searchParams.get('next');
+                        if (nextParam) {
+                            href = decodeURIComponent(nextParam);
+                            console.log(`[Scraper-Browser] Healed login link to: ${href}`);
+                        }
+                    } catch (e) { }
+                }
+
+                // Skip link login/register nếu không lấy được next param sạch
+                if (href.includes('/login') || href.includes('/reg/')) continue;
 
                 // ƯU TIÊN 1: Nút "Xem trang cá nhân" chính thống
                 if (text.includes('xem trang cá nhân') || text.includes('view profile')) {
-                    return { profileLink: href, customerName: extractedName };
+                    if (href && href.includes('facebook.com/') && !href.includes('/latest/')) {
+                        return { profileLink: href, customerName: extractedName };
+                    }
                 }
 
                 if (href.includes('facebook.com/') && !href.includes('/latest/')) {
@@ -153,10 +155,12 @@ async function scrapeProfileLink(psid, senderName, pageId) {
                     }
 
                     // Ưu tiên 3: Link username (thường ngắn và không có nhiều dấu /)
-                    const pathParts = new URL(href).pathname.split('/').filter(p => p);
-                    if (pathParts.length === 1 && pathParts[0].length > 4) {
-                        bestLink = href;
-                    }
+                    try {
+                        const pathParts = new URL(href).pathname.split('/').filter(p => p);
+                        if (pathParts.length === 1 && pathParts[0].length > 4) {
+                            bestLink = href;
+                        }
+                    } catch (e) { }
                 }
             }
             return { profileLink: bestLink, customerName: extractedName };

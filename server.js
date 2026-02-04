@@ -183,9 +183,7 @@ app.get('/webhook', (req, res) => {
 app.post('/webhook', async (req, res) => {
     const body = req.body;
     if (body.object === 'page') {
-        console.log(`[Webhook] Received update for ${body.entry.length} entries.`);
         for (const entry of body.entry) {
-            console.log('[Webhook] Entry Content:', JSON.stringify(entry, null, 2));
             const pageId = entry.id;
             const pageConfig = config.pages[pageId];
 
@@ -194,25 +192,41 @@ app.post('/webhook', async (req, res) => {
                 continue;
             }
 
-            // 1. Xử lý TIN NHẮN (Messaging hoặc Standby - nghe lén)
-            const messaging_events = entry.messaging || entry.standby;
-            if (messaging_events) {
+            // 1. Xử lý TIN NHẮN (Messaging VÀ Standby)
+            const messaging_events = (entry.messaging || []).concat(entry.standby || []);
+
+            if (messaging_events.length > 0) {
                 for (const webhook_event of messaging_events) {
-                    if (webhook_event.message) {
+                    // Chấp nhận cả Message và Postback (Nút bấm)
+                    if (webhook_event.message || webhook_event.postback) {
                         const psid = webhook_event.sender.id;
-                        const messageText = webhook_event.message.text || '[Attachment/Non-text]';
-                        const isEcho = webhook_event.message.is_echo;
+                        const isEcho = webhook_event.message ? webhook_event.message.is_echo : false;
+
+                        // BỎ LOG KHI PAGE GỬI ĐI (ECHO)
+                        if (isEcho) continue;
+
                         const mode = entry.standby ? 'Standby' : 'Inbox';
 
-                        // In ra toàn bộ để anh dễ theo dõi
-                        console.log(`[Webhook][${mode}] Event: ${isEcho ? 'Echo' : 'Message'}, From: ${psid}, Text: ${messageText}`);
-
-                        if (!isEcho) {
-                            const messageId = webhook_event.message.mid;
-                            processEvent(pageId, pageConfig, psid, messageId, messageText, mode).catch(err => {
-                                console.error(`[Error] Message processing failed:`, err.message);
-                            });
+                        // Lấy nội dung: text message hoặc title của nút bấm
+                        let messageText = '[No-Content]';
+                        if (webhook_event.message) {
+                            messageText = webhook_event.message.text || '[Attachment/Non-text]';
+                        } else if (webhook_event.postback) {
+                            messageText = `[Postback] ${webhook_event.postback.title || webhook_event.postback.payload}`;
                         }
+
+                        // Chỉ log Content khi có message thật từ khách
+                        console.log('[Webhook] Entry Content:', JSON.stringify(entry, null, 2));
+                        console.log(`[Webhook][${mode}] Event: ${webhook_event.postback ? 'Postback' : 'Message'}, From: ${psid}, Text: ${messageText}`);
+
+                        const messageId = webhook_event.message ? webhook_event.message.mid : `postback_${Date.now()}`;
+                        processEvent(pageId, pageConfig, psid, messageId, messageText, mode).catch(err => {
+                            console.error(`[Error] Event processing failed:`, err.message);
+                        });
+                    } else {
+                        // Log các event khác để debug (read, delivery, referral, v.v.)
+                        const eventType = Object.keys(webhook_event).find(k => k !== 'sender' && k !== 'recipient' && k !== 'timestamp');
+                        if (eventType) console.log(`[Webhook] Ignored event type: ${eventType} from ${webhook_event.sender?.id}`);
                     }
                 }
             }
@@ -257,8 +271,8 @@ async function processEvent(pageId, pageConfig, psid, messageId, message, source
     // 1. Enrich User Data
     let userInfo = { fullName: customerName || 'Người dùng Messenger', profileLink: null };
 
-    // Nếu tin nhắn từ Inbox, thử gọi API lấy thông tin (nếu ID là Messenger ID)
-    if (source === 'Inbox') {
+    // Nếu tin nhắn từ Inbox (và không phải postback ID giả), thử gọi API lấy thông tin
+    if (source === 'Inbox' && messageId && !messageId.startsWith('postback_')) {
         const apiInfo = await getSenderInfoFromMessage(pageConfig, messageId);
         if (apiInfo) userInfo = apiInfo;
     }
@@ -276,17 +290,25 @@ async function processEvent(pageId, pageConfig, psid, messageId, message, source
 
         let scrapedInfo = null;
         try {
-            // Append task to queue and wait for it to finish
-            scrapedInfo = await scraperQueue.then(async () => {
-                console.log(`[Queue] Starting scrape for ${userInfo.fullName}...`);
-                const result = await scrapeProfileLink(psid, userInfo.fullName, pageId);
-                // Delay nhỏ giữa các lần scrape để browser kịp đóng/mở clean
-                await new Promise(r => setTimeout(r, 2000));
-                return result;
-            }).catch(err => {
-                console.error('[Queue] Scrape failed:', err);
-                return null;
+            // Fix Queue logic: correctly chain the promise and update scraperQueue
+            const currentScrape = scraperQueue.then(async () => {
+                console.log(`[Queue] Starting scrape for ${userInfo.fullName} (PSID: ${psid})...`);
+                try {
+                    const result = await scrapeProfileLink(psid, userInfo.fullName, pageId);
+                    // Delay nhỏ giữa các lần scrape để browser kịp đóng/mở clean
+                    await new Promise(r => setTimeout(r, 2000));
+                    return result;
+                } catch (innerErr) {
+                    console.error(`[Queue] Internal scrape error for ${psid}:`, innerErr.message);
+                    return null;
+                }
             });
+
+            // Update the global scraperQueue to wait for this one before the next one
+            scraperQueue = currentScrape.then(() => { }).catch(() => { });
+
+            // Wait for our current scrape to finish
+            scrapedInfo = await currentScrape;
         } catch (err) {
             console.error('[Server] Queue error:', err);
         }
@@ -333,49 +355,61 @@ async function processEvent(pageId, pageConfig, psid, messageId, message, source
     console.log('------------------------');
 
     // 4. Save to Google Sheets
-    const dataToSave = {
-        source,
-        psid,
-        fullName: userInfo.fullName,
-        phoneNumber,
-        message,
-        profileLink,
-        adminChatLink
-    };
+    try {
+        const dataToSave = {
+            source,
+            psid,
+            fullName: userInfo.fullName,
+            phoneNumber,
+            message,
+            profileLink,
+            adminChatLink
+        };
 
-    const sheetContext = {
-        google_sheet: {
-            ...config.google_sheet,
-            spreadsheet_id: pageConfig.spreadsheet_id,
-            sheet_name: pageConfig.sheet_name
-        }
-    };
+        const sheetContext = {
+            google_sheet: {
+                ...config.google_sheet,
+                spreadsheet_id: pageConfig.spreadsheet_id,
+                sheet_name: pageConfig.sheet_name
+            }
+        };
 
-    console.log(`[Server] Appending data to Google Sheets (Page: ${pageConfig.name})...`);
-    await appendToSheet(sheetContext, dataToSave);
-    console.log(`[Server] ✅ Data appended to Google Sheets.`);
+        console.log(`[Server] Appending data to Google Sheets (Page: ${pageConfig.name})...`);
+        await appendToSheet(sheetContext, dataToSave);
+        console.log(`[Server] ✅ Data appended to Google Sheets.`);
+    } catch (saveErr) {
+        console.error(`[Server] ❌ Failed to save to Google Sheets:`, saveErr.message);
+    }
 
     // 5. Gửi lên API N8N
-    const n8nData = {
-        source,
-        page_id: pageId,
-        ps_id: psid,
-        m_id: messageId,
-        time_stamp: new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Ho_Chi_Minh' }).replace(' ', 'T'),
-        customer_name: userInfo.fullName,
-        customer_facebook_url: profileLink,
-        text: message,
-        extracted_phone_number: phoneNumber
-    };
+    try {
+        const n8nData = {
+            source,
+            page_id: pageId,
+            ps_id: psid,
+            m_id: messageId,
+            time_stamp: new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Ho_Chi_Minh' }).replace(' ', 'T'),
+            customer_name: userInfo.fullName,
+            customer_facebook_url: profileLink,
+            text: message,
+            extracted_phone_number: phoneNumber
+        };
 
-    console.log(`[Server] Sending data to N8N (Source: ${source})...`);
-    await sendToN8N(n8nData);
-    console.log(`[Server] ✅ Data sent to N8N.`);
+        console.log(`[Server] Sending data to N8N (Source: ${source})...`);
+        await sendToN8N(n8nData);
+        console.log(`[Server] ✅ Data sent to N8N.`);
+    } catch (n8nErr) {
+        console.error(`[Server] ❌ Failed to send to N8N:`, n8nErr.message);
+    }
 
     // 6. Trả lời hội thoại về Inbox chính (Chỉ làm nếu App là Primary - 'Inbox')
     if (source === 'Inbox') {
-        console.log(`[Server] Passing thread control back to Inbox...`);
-        await passThreadControl(pageConfig, psid);
+        try {
+            console.log(`[Server] Passing thread control back to Inbox...`);
+            await passThreadControl(pageConfig, psid);
+        } catch (passErr) {
+            console.error(`[Server] ❌ Failed to pass thread control:`, passErr.message);
+        }
     }
 }
 
