@@ -10,12 +10,15 @@ const { scrapeProfileLink } = require('./services/scraper');
 const { sendToN8N } = require('./services/apiN8N');
 const DebugMonitor = require('./utils/debugMonitor');
 
-// Initialize Debug Monitor
-const debugMonitor = new DebugMonitor();
-console.log('[DebugMonitor] Initialized. Auto-check every 5 minutes.');
+// Initialize Debug Monitor (Disabled for deploy)
+// const debugMonitor = new DebugMonitor();
+// console.log('[DebugMonitor] Initialized. Auto-check every 5 minutes.');
 
 // QUEUE for scraping to prevent concurrency issues (too many browsers / race conditions)
 let scraperQueue = Promise.resolve();
+
+// Keep track of PSIDs currently being processed/scraped to avoid duplicates
+const processingPsids = new Set();
 
 // Load Config
 const configPath = path.resolve(__dirname, 'config.json');
@@ -224,8 +227,17 @@ app.post('/webhook', async (req, res) => {
                         console.log('[Webhook] Entry Content:', JSON.stringify(entry, null, 2));
                         console.log(`[Webhook][${mode}] Event: ${webhook_event.postback ? 'Postback' : 'Message'}, From: ${psid}, Text: ${messageText}`);
 
+                        // DEDUPLICATION: Nếu PSID này đang được xử lý (đang trong hàng đợi hoặc đang scrape), bỏ qua
+                        if (processingPsids.has(psid)) {
+                            console.log(`[Dedupe] 🛡️ Ignoring duplicate event for ${psid} (Already in progress)`);
+                            continue;
+                        }
+                        processingPsids.add(psid);
+
                         const messageId = webhook_event.message ? webhook_event.message.mid : `postback_${Date.now()}`;
-                        processEvent(pageId, pageConfig, psid, messageId, messageText, mode).catch(err => {
+                        processEvent(pageId, pageConfig, psid, messageId, messageText, mode).finally(() => {
+                            processingPsids.delete(psid);
+                        }).catch(err => {
                             console.error(`[Error] Event processing failed:`, err.message);
                         });
                     }
@@ -415,25 +427,69 @@ async function processEvent(pageId, pageConfig, psid, messageId, message, source
     }
 
     // 5. Gửi lên API N8N (Chỉ cho Message, không cho Comment)
-    if (source !== 'Comment') {
-        try {
-            const n8nData = {
-                source,
-                page_id: pageId,
-                ps_id: psid,
-                m_id: messageId,
-                time_stamp: new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Ho_Chi_Minh' }).replace(' ', 'T'),
-                customer_name: userInfo.fullName,
-                customer_facebook_url: profileLink,
-                text: message,
-                extracted_phone_number: phoneNumber
-            };
+    // Validate dữ liệu trước khi gửi: Phải có tên thật và link thật (không phải fallback PSID)
+    const genericNames = ['người dùng messenger', 'người dùng facebook', 'facebook user'];
+    const currentNameLower = (userInfo.fullName || '').toLowerCase();
+    const isNameValid = !genericNames.includes(currentNameLower) && userInfo.fullName && userInfo.fullName.length > 0;
 
-            console.log(`[Server] Sending data to N8N (Source: ${source})...`);
-            await sendToN8N(n8nData);
-            console.log(`[Server] ✅ Data sent to N8N.`);
-        } catch (n8nErr) {
-            console.error(`[Server] ❌ Failed to send to N8N:`, n8nErr.message);
+    // Check if link is a real scraped link (not just profile.php?id=PSID generic fallback unless it was actually scraped confirmed)
+    // Ở đoạn code trên, nếu scrapedInfo trả về thì profileLink được update.
+    // Nếu không scrape được, profileLink = generateProfileLink(psid).
+    // Ta cần biết profileLink hiện tại đến từ đâu.
+    // Cách đơn giản: Nếu scrape fail, profileLink sẽ là fallback.
+    // Tuy nhiên hàm generateProfileLink trả về dạng: https://www.facebook.com/profile.php?id=...
+    // Link scrape được đôi khi cũng dạng đó.
+    // Nên ta thêm flag check.
+
+    // Logic check:
+    // User yêu cầu: "nếu k lấy được đúng tên và link thì k gửi qua webhooks"
+    // -> Nếu scrapedInfo = null (hoặc fail) -> K gửi N8N (vì sẽ dùng fallback link)
+    // -> Nếu tên vẫn là 'Người dùng Facebook' -> K gửi N8N
+
+    // Lưu ý: source = 'Comment' thì vẫn lưu sheets, ko gửi N8N (logic cũ).
+    // source = 'Inbox': 
+
+    if (source !== 'Comment') {
+        // Điều kiện gửi N8N:
+        // 1. Tên hợp lệ (không phải generic)
+        // 2. Link hợp lệ (Scraper phải chạy thành công và trả về link)
+        // Chúng ta check lại biến scrapedInfo ở scope trên (cần chuyển scrapedInfo ra ngoài hoặc check profileLink vs PSID)
+
+        // Tuy nhiên `scrapedInfo` là biến local trong block if (!profileLink).
+        // Ta sẽ check kỹ hơn ở đây.
+
+        // Kiem tra ten
+        if (!isNameValid) {
+            console.log(`[Server] ⚠️ Skipping N8N: Name is generic/invalid ("${userInfo.fullName}")`);
+        }
+        // Kiem tra Link. Link xịn thường là username hoặc profile.php?id=UID (UID khác PSID).
+        // Nếu link chứa PSID -> Khả năng cao là link fake (trừ khi user chưa set username và UID == PSID - hiếm vs Page).
+        else if (profileLink && profileLink.includes(psid)) {
+            console.log(`[Server] ⚠️ Skipping N8N: Link appears to be fallback PSID link (${profileLink})`);
+        }
+        else if (!profileLink) {
+            console.log(`[Server] ⚠️ Skipping N8N: No profile link.`);
+        }
+        else {
+            try {
+                const n8nData = {
+                    source,
+                    page_id: pageId,
+                    ps_id: psid,
+                    m_id: messageId,
+                    time_stamp: new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Ho_Chi_Minh' }).replace(' ', 'T'),
+                    customer_name: userInfo.fullName,
+                    customer_facebook_url: profileLink,
+                    text: message,
+                    extracted_phone_number: phoneNumber
+                };
+
+                console.log(`[Server] Sending data to N8N (Source: ${source})...`);
+                await sendToN8N(n8nData);
+                console.log(`[Server] ✅ Data sent to N8N.`);
+            } catch (n8nErr) {
+                console.error(`[Server] ❌ Failed to send to N8N:`, n8nErr.message);
+            }
         }
     } else {
         console.log(`[Server] ℹ️ Skipping N8N webhook for Comment (only saved to Sheets).`);
@@ -459,15 +515,15 @@ const PORT = process.env.PORT || config.port || 3000;
 app.listen(PORT, () => {
     console.log(`[Server] Webhook is listening at port ${PORT}`);
 
-    // Print initial debug report
-    debugMonitor.printReport();
+    // Print initial debug report (Disabled for deploy)
+    // debugMonitor.printReport();
 
     // Setup periodic check every 5 minutes
-    setInterval(() => {
-        debugMonitor.autoAlert();
-    }, 5 * 60 * 1000); // 5 minutes
+    // setInterval(() => {
+    //     debugMonitor.autoAlert();
+    // }, 5 * 60 * 1000); // 5 minutes
 
-    console.log('[Server] Debug monitoring active. Will check for login errors every 5 minutes.');
+    // console.log('[Server] Debug monitoring active. Will check for login errors every 5 minutes.');
 });
 
 // Handle config file changes for hot-reloading (optional)
