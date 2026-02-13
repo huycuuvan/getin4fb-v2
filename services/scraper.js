@@ -2,6 +2,12 @@ const puppeteer = require('puppeteer');
 const fs = require('fs');
 const path = require('path');
 
+// Debug directory for screenshots
+const DEBUG_DIR = path.resolve(__dirname, '../debug_screenshots');
+if (!fs.existsSync(DEBUG_DIR)) {
+    fs.mkdirSync(DEBUG_DIR, { recursive: true });
+}
+
 const COOKIES_PATH = path.resolve(__dirname, '../cookies.json');
 
 /**
@@ -9,6 +15,11 @@ const COOKIES_PATH = path.resolve(__dirname, '../cookies.json');
  */
 async function scrapeProfileLink(psid, senderName, pageId) {
     let browser = null;
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const debugPrefix = `${timestamp}_${psid.substring(0, 8)}`;
+
+    console.log(`[Scraper][${debugPrefix}] Starting scrape for PSID: ${psid}, Name: ${senderName}, PageID: ${pageId}`);
+
     try {
         browser = await puppeteer.launch({
             headless: true,
@@ -26,29 +37,39 @@ async function scrapeProfileLink(psid, senderName, pageId) {
             const cookies = Array.isArray(cookiesData) ? cookiesData : (cookiesData.cookies || []);
 
             if (cookies.length === 0) {
-                console.warn('[Scraper] ⚠️ Cookies file is empty or invalid format.');
+                console.warn(`[Scraper][${debugPrefix}] ⚠️ Cookies file is empty or invalid format.`);
                 return null;
             }
 
+            console.log(`[Scraper][${debugPrefix}] Loading ${cookies.length} cookies`);
             await page.setCookie(...cookies);
         } else {
-            console.warn('[Scraper] ⚠️ No cookies.json found.');
+            console.warn(`[Scraper][${debugPrefix}] ⚠️ No cookies.json found.`);
             return null;
         }
 
         const businessInboxUrl = `https://business.facebook.com/latest/inbox/all?asset_id=${pageId}&selected_item_id=${psid}`;
+        console.log(`[Scraper][${debugPrefix}] Navigating to: ${businessInboxUrl}`);
+
         await page.goto(businessInboxUrl, { waitUntil: 'networkidle2', timeout: 60000 });
 
         const currentUrl = page.url();
+        console.log(`[Scraper][${debugPrefix}] Current URL after navigation: ${currentUrl}`);
+
         if (currentUrl.includes('facebook.com/login')) {
-            console.error('[Scraper] ❌ Cookies expired.');
+            console.error(`[Scraper][${debugPrefix}] ❌ Cookies expired - redirected to login page`);
+            const screenshotPath = path.join(DEBUG_DIR, `${debugPrefix}_ERROR_login_redirect.png`);
+            await page.screenshot({ path: screenshotPath, fullPage: true });
+            console.error(`[Scraper][${debugPrefix}] Login page screenshot saved: ${screenshotPath}`);
             return null;
         }
 
         // Đợi 1 chút cho load trang (vẫn cần vì NetworkIdle2 không đảm bảo panel đã render)
+        console.log(`[Scraper][${debugPrefix}] Waiting for page to fully render...`);
         await new Promise(resolve => setTimeout(resolve, 3000));
 
         // Step 2: Chọn cuộc hội thoại
+        console.log(`[Scraper][${debugPrefix}] Step 2: Selecting conversation for: ${senderName}`);
         await page.evaluate((targetName) => {
             const genericNames = ['người dùng facebook', 'facebook user', 'người dùng messenger'];
             const targetLower = (targetName || '').toLowerCase(); // Tên cần tìm (đã lower)
@@ -87,20 +108,39 @@ async function scrapeProfileLink(psid, senderName, pageId) {
         }, senderName);
 
         // Chờ panel thông tin hiện ra (Nút mở panel hoặc tên người dùng)
+        console.log(`[Scraper][${debugPrefix}] Step 2.5: Waiting for conversation panel...`);
         try {
             await page.waitForSelector('div[role="heading"][aria-level="3"], div[role="main"] h2', { timeout: 10000 });
-        } catch (e) { }
+            console.log(`[Scraper][${debugPrefix}] Conversation panel loaded`);
+        } catch (e) {
+            console.warn(`[Scraper][${debugPrefix}] ⚠️ Timeout waiting for conversation panel`);
+        }
+
+        // Screenshot sau khi chọn conversation
+        const screenshotPath2 = path.join(DEBUG_DIR, `${debugPrefix}_02_after_select_conversation.png`);
+        await page.screenshot({ path: screenshotPath2, fullPage: true });
+        console.log(`[Scraper][${debugPrefix}] Screenshot saved: ${screenshotPath2}`);
+
 
         // Step 3: Đảm bảo click vào tên để mở panel chi tiết nếu nó chưa mở
+        console.log(`[Scraper][${debugPrefix}] Step 3: Opening detail panel...`);
         await page.evaluate((name) => {
             const els = Array.from(document.querySelectorAll('span, div, a'));
             const target = els.find(el => el.textContent.trim() === name || el.textContent.trim() === 'Người dùng Messenger');
             if (target) target.click();
         }, senderName);
 
+        console.log(`[Scraper][${debugPrefix}] Waiting for detail panel to load...`);
         await new Promise(resolve => setTimeout(resolve, 2000));
 
+        // Screenshot sau khi mở panel chi tiết
+        const screenshotPath3 = path.join(DEBUG_DIR, `${debugPrefix}_03_after_open_detail_panel.png`);
+        await page.screenshot({ path: screenshotPath3, fullPage: true });
+        console.log(`[Scraper][${debugPrefix}] Screenshot saved: ${screenshotPath3}`);
+
+
         // Step 4: Lấy Link & Tên (Lọc kỹ để né link Help/System)
+        console.log(`[Scraper][${debugPrefix}] Step 4: Extracting profile link and name...`);
         const info = await page.evaluate(async () => {
             let extractedName = null;
             const nameEl = document.querySelector('div[role="heading"][aria-level="3"], div[role="main"] h2');
@@ -166,7 +206,11 @@ async function scrapeProfileLink(psid, senderName, pageId) {
             return { profileLink: bestLink, customerName: extractedName };
         });
 
+        console.log(`[Scraper][${debugPrefix}] Extracted info:`, JSON.stringify(info, null, 2));
+
+
         // Step 5 & 6: Lôi khách ra Inbox (NỀN TẢNG QUAN TRỌNG)
+        console.log(`[Scraper][${debugPrefix}] Step 5: Moving conversation to inbox...`);
         try {
             const actionResult = await page.evaluate(() => {
                 const inboxTerms = ['thư mục chính', 'move to main', 'hộp thư đến', 'move to inbox', 'bỏ lưu trữ', 'unarchive'];
@@ -217,15 +261,40 @@ async function scrapeProfileLink(psid, senderName, pageId) {
                 });
                 if (menuAction) console.log(`[Scraper] ✅ Bấm trong Menu: ${menuAction}`);
             } else if (actionResult.type !== 'NONE') {
-                console.log(`[Scraper] ✅ Hành động: ${actionResult.type} (${actionResult.details})`);
+                console.log(`[Scraper][${debugPrefix}] ✅ Hành động: ${actionResult.type} (${actionResult.details})`);
+            } else {
+                console.log(`[Scraper][${debugPrefix}] No inbox action needed`);
             }
-        } catch (err) { }
+        } catch (err) {
+            console.error(`[Scraper][${debugPrefix}] ⚠️ Error during inbox action:`, err.message);
+        }
 
+        console.log(`[Scraper][${debugPrefix}] ✅ Scraping completed successfully`);
         return info;
     } catch (e) {
+        console.error(`[Scraper][${debugPrefix}] ❌ Fatal error during scraping:`, e.message);
+        console.error(`[Scraper][${debugPrefix}] Stack trace:`, e.stack);
+
+        // Screenshot lỗi nếu page còn tồn tại
+        try {
+            if (browser) {
+                const pages = await browser.pages();
+                if (pages.length > 0) {
+                    const errorScreenshot = path.join(DEBUG_DIR, `${debugPrefix}_ERROR_exception.png`);
+                    await pages[0].screenshot({ path: errorScreenshot, fullPage: true });
+                    console.error(`[Scraper][${debugPrefix}] Error screenshot saved: ${errorScreenshot}`);
+                }
+            }
+        } catch (screenshotErr) {
+            console.error(`[Scraper][${debugPrefix}] Could not capture error screenshot:`, screenshotErr.message);
+        }
+
         return null;
     } finally {
-        if (browser) await browser.close();
+        if (browser) {
+            await browser.close();
+            console.log(`[Scraper][${debugPrefix}] Browser closed`);
+        }
     }
 }
 

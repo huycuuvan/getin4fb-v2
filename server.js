@@ -8,6 +8,11 @@ const { appendToSheet } = require('./services/googleSheets');
 const { extractPhoneNumber } = require('./utils/helpers');
 const { scrapeProfileLink } = require('./services/scraper');
 const { sendToN8N } = require('./services/apiN8N');
+const DebugMonitor = require('./utils/debugMonitor');
+
+// Initialize Debug Monitor
+const debugMonitor = new DebugMonitor();
+console.log('[DebugMonitor] Initialized. Auto-check every 5 minutes.');
 
 // QUEUE for scraping to prevent concurrency issues (too many browsers / race conditions)
 let scraperQueue = Promise.resolve();
@@ -264,73 +269,107 @@ app.post('/webhook', async (req, res) => {
 async function processEvent(pageId, pageConfig, psid, messageId, message, source = 'Inbox', customerName = null) {
     // 1. Enrich User Data
     let userInfo = { fullName: customerName || 'Người dùng Messenger', profileLink: null };
+    let profileLink = null;
 
-    // Nếu tin nhắn từ Inbox (và không phải postback ID giả), thử gọi API lấy thông tin
-    if (source === 'Inbox' && messageId && !messageId.startsWith('postback_')) {
-        const apiInfo = await getSenderInfoFromMessage(pageConfig, messageId);
-        if (apiInfo) userInfo = apiInfo;
-    }
+    // QUAN TRỌNG: Comment và Message có cách lấy profile link khác nhau!
+    // - Comment: psid là Facebook User ID (public) -> Dùng trực tiếp
+    // - Message: psid là Page-Scoped ID -> Cần scrape hoặc API
 
-    // 2. Generate Links
-    // Ưu tiên: API > Scraper > Fallback PSID
-    let profileLink = userInfo.profileLink; // Từ API (thường null)
-
-    if (!profileLink) {
-        // Delay 2s để tránh bị trùng lặp quá nhanh
-        await new Promise(resolve => setTimeout(resolve, 2000));
-
-        // Thử dùng Puppeteer scraper để lấy cả link và tên thật (QUEUE SEQUENTIAL)
-        console.log('[Server] Attempting to scrape profile info (Queued)...');
-
-        let scrapedInfo = null;
-        try {
-            // Fix Queue logic: correctly chain the promise and update scraperQueue
-            const currentScrape = scraperQueue.then(async () => {
-                console.log(`[Queue] Starting scrape for ${userInfo.fullName} (PSID: ${psid})...`);
-                try {
-                    const result = await scrapeProfileLink(psid, userInfo.fullName, pageId);
-                    // Delay nhỏ giữa các lần scrape để browser kịp đóng/mở clean
-                    await new Promise(r => setTimeout(r, 2000));
-                    return result;
-                } catch (innerErr) {
-                    console.error(`[Queue] Internal scrape error for ${psid}:`, innerErr.message);
-                    return null;
-                }
-            });
-
-            // Update the global scraperQueue to wait for this one before the next one
-            scraperQueue = currentScrape.then(() => { }).catch(() => { });
-
-            // Wait for our current scrape to finish
-            scrapedInfo = await currentScrape;
-        } catch (err) {
-            console.error('[Server] Queue error:', err);
+    if (source === 'Comment') {
+        // Với Comment, psid chính là Facebook User ID
+        console.log(`[Server] 💬 Processing COMMENT from User ID: ${psid}`);
+        profileLink = `https://www.facebook.com/profile.php?id=${psid}`;
+        userInfo.profileLink = profileLink;
+        console.log(`[Server] ✅ Comment profile link: ${profileLink}`);
+        // Không cần scrape Business Inbox cho comment
+    } else {
+        // Với Message/Inbox, xử lý như cũ
+        // Nếu tin nhắn từ Inbox (và không phải postback ID giả), thử gọi API lấy thông tin
+        if (source === 'Inbox' && messageId && !messageId.startsWith('postback_')) {
+            const apiInfo = await getSenderInfoFromMessage(pageConfig, messageId);
+            if (apiInfo) userInfo = apiInfo;
         }
 
-        if (scrapedInfo) {
-            profileLink = scrapedInfo.profileLink;
-            // Cập nhật tên thật nếu lấy được từ Scraper (Chỉ khi tên hiện tại chưa có hoặc là placeholder)
-            const placeholders = ['người dùng facebook', 'facebook user', 'người dùng messenger'];
-            const currentNameLower = (userInfo.fullName || '').toLowerCase();
+        // 2. Generate Links
+        // Ưu tiên: API > Scraper > Fallback PSID
+        profileLink = userInfo.profileLink; // Từ API (thường null)
 
-            if (scrapedInfo.customerName &&
-                (!userInfo.fullName || placeholders.includes(currentNameLower)) &&
-                scrapedInfo.customerName !== 'Người dùng Messenger') {
-                console.log(`[Server] Updating name from Scraper: ${userInfo.fullName} -> ${scrapedInfo.customerName}`);
-                userInfo.fullName = scrapedInfo.customerName;
+        if (!profileLink) {
+            // Delay 2s để tránh bị trùng lặp quá nhanh
+            await new Promise(resolve => setTimeout(resolve, 2000));
+
+            // Thử dùng Puppeteer scraper để lấy cả link và tên thật (QUEUE SEQUENTIAL)
+            console.log('[Server] Attempting to scrape profile info (Queued)...');
+
+            let scrapedInfo = null;
+            try {
+                // Fix Queue logic: correctly chain the promise and update scraperQueue
+                const currentScrape = scraperQueue.then(async () => {
+                    console.log(`[Queue] ⏳ Starting scrape for ${userInfo.fullName} (PSID: ${psid})...`);
+                    console.log(`[Queue] 📊 Current queue depth: ${scraperQueue === Promise.resolve() ? 0 : 'processing'}`);
+                    try {
+                        const result = await scrapeProfileLink(psid, userInfo.fullName, pageId);
+                        console.log(`[Queue] ✅ Scrape completed for ${psid}. Result:`, result ? 'Success' : 'Failed/Null');
+                        if (result) {
+                            console.log(`[Queue] 📝 Profile Link: ${result.profileLink || 'NULL'}`);
+                            console.log(`[Queue] 👤 Customer Name: ${result.customerName || 'NULL'}`);
+                        }
+                        // Delay nhỏ giữa các lần scrape để browser kịp đóng/mở clean
+                        await new Promise(r => setTimeout(r, 2000));
+                        return result;
+                    } catch (innerErr) {
+                        console.error(`[Queue] ❌ Internal scrape error for ${psid}:`, innerErr.message);
+                        console.error(`[Queue] Stack:`, innerErr.stack);
+                        return null;
+                    }
+                });
+
+                // Update the global scraperQueue to wait for this one before the next one
+                scraperQueue = currentScrape.then(() => { }).catch(() => { });
+
+                // Wait for our current scrape to finish
+                scrapedInfo = await currentScrape;
+            } catch (err) {
+                console.error('[Server] ❌ Queue error:', err);
+                console.error('[Server] Stack:', err.stack);
+            }
+
+            if (scrapedInfo) {
+                console.log(`[Server] 🔍 Processing scraped info...`);
+                profileLink = scrapedInfo.profileLink;
+
+                // Kiểm tra xem có phải là link login redirect không
+                if (profileLink && profileLink.includes('/login')) {
+                    console.warn(`[Server] ⚠️ WARNING: Scraped link is a login redirect! Link: ${profileLink}`);
+                    console.warn(`[Server] ⚠️ This indicates cookies may be expired or session issue occurred during scraping`);
+                    // Không dùng link login, để fallback xuống PSID
+                    profileLink = null;
+                }
+
+                // Cập nhật tên thật nếu lấy được từ Scraper (Chỉ khi tên hiện tại chưa có hoặc là placeholder)
+                const placeholders = ['người dùng facebook', 'facebook user', 'người dùng messenger'];
+                const currentNameLower = (userInfo.fullName || '').toLowerCase();
+
+                if (scrapedInfo.customerName &&
+                    (!userInfo.fullName || placeholders.includes(currentNameLower)) &&
+                    scrapedInfo.customerName !== 'Người dùng Messenger') {
+                    console.log(`[Server] 📝 Updating name from Scraper: ${userInfo.fullName} -> ${scrapedInfo.customerName}`);
+                    userInfo.fullName = scrapedInfo.customerName;
+                } else {
+                    console.log(`[Server] 📝 Kept Webhook name: ${userInfo.fullName} (Scraper found: ${scrapedInfo.customerName})`);
+                }
             } else {
-                console.log(`[Server] Kept Webhook name: ${userInfo.fullName} (Scraper found: ${scrapedInfo.customerName})`);
+                console.warn(`[Server] ⚠️ Scraper returned NULL - will use fallback PSID link`);
             }
         }
-    }
 
-    if (!profileLink) {
-        // Fallback: Dùng PSID (sẽ không mở được nhưng để làm reference)
-        profileLink = await generateProfileLink(psid);
+        if (!profileLink) {
+            // Fallback: Dùng PSID (sẽ không mở được nhưng để làm reference)
+            profileLink = await generateProfileLink(psid);
+        }
     }
 
     const adminChatLink = generateAdminChatLink(pageId, psid);
-
     const phoneNumber = extractPhoneNumber(message);
 
     // 3. Log to Console
@@ -375,25 +414,29 @@ async function processEvent(pageId, pageConfig, psid, messageId, message, source
         console.error(`[Server] ❌ Failed to save to Google Sheets:`, saveErr.message);
     }
 
-    // 5. Gửi lên API N8N
-    try {
-        const n8nData = {
-            source,
-            page_id: pageId,
-            ps_id: psid,
-            m_id: messageId,
-            time_stamp: new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Ho_Chi_Minh' }).replace(' ', 'T'),
-            customer_name: userInfo.fullName,
-            customer_facebook_url: profileLink,
-            text: message,
-            extracted_phone_number: phoneNumber
-        };
+    // 5. Gửi lên API N8N (Chỉ cho Message, không cho Comment)
+    if (source !== 'Comment') {
+        try {
+            const n8nData = {
+                source,
+                page_id: pageId,
+                ps_id: psid,
+                m_id: messageId,
+                time_stamp: new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Ho_Chi_Minh' }).replace(' ', 'T'),
+                customer_name: userInfo.fullName,
+                customer_facebook_url: profileLink,
+                text: message,
+                extracted_phone_number: phoneNumber
+            };
 
-        console.log(`[Server] Sending data to N8N (Source: ${source})...`);
-        await sendToN8N(n8nData);
-        console.log(`[Server] ✅ Data sent to N8N.`);
-    } catch (n8nErr) {
-        console.error(`[Server] ❌ Failed to send to N8N:`, n8nErr.message);
+            console.log(`[Server] Sending data to N8N (Source: ${source})...`);
+            await sendToN8N(n8nData);
+            console.log(`[Server] ✅ Data sent to N8N.`);
+        } catch (n8nErr) {
+            console.error(`[Server] ❌ Failed to send to N8N:`, n8nErr.message);
+        }
+    } else {
+        console.log(`[Server] ℹ️ Skipping N8N webhook for Comment (only saved to Sheets).`);
     }
 
     // 6. Trả lời hội thoại về Inbox chính (Chỉ làm nếu App là Primary - 'Inbox')
@@ -415,6 +458,16 @@ app.get('/', (req, res) => {
 const PORT = process.env.PORT || config.port || 3000;
 app.listen(PORT, () => {
     console.log(`[Server] Webhook is listening at port ${PORT}`);
+
+    // Print initial debug report
+    debugMonitor.printReport();
+
+    // Setup periodic check every 5 minutes
+    setInterval(() => {
+        debugMonitor.autoAlert();
+    }, 5 * 60 * 1000); // 5 minutes
+
+    console.log('[Server] Debug monitoring active. Will check for login errors every 5 minutes.');
 });
 
 // Handle config file changes for hot-reloading (optional)
